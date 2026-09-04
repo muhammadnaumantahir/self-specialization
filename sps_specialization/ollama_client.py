@@ -2,6 +2,7 @@ import json
 import os
 import urllib.request
 
+
 class OllamaClient:
     def __init__(self, base_url="http://localhost:11434", model=None, timeout=120):
         self.base_url = base_url.rstrip("/")
@@ -9,7 +10,12 @@ class OllamaClient:
         self.timeout = timeout
 
     def generate(self, prompt):
-        payload = json.dumps({"model": self.model, "prompt": prompt, "stream": False}).encode()
+        payload = json.dumps({
+            "model": self.model,
+            "prompt": prompt,
+            "stream": False,
+            "options": {"temperature": 0},
+        }).encode()
         request = urllib.request.Request(
             f"{self.base_url}/api/generate", data=payload,
             headers={"Content-Type": "application/json"}
