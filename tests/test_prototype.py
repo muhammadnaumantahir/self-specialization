@@ -20,6 +20,11 @@ class FakeOllama:
         return self.source
 
 
+class FailingOllama:
+    def generate(self, prompt):
+        raise ConnectionError("Ollama server unavailable")
+
+
 def make_parent(registry=None):
     parent = Capability.create("IntegerMultiplication", "1.0", "S0", ["int", "int"], "int", INTEGER_SOURCE)
     if registry:
@@ -85,9 +90,6 @@ def test_verifier_reports_wrong_result():
 
 def test_verifier_reports_syntax_error():
     verifier = Verifier()
-    # This fixture is intentionally malformed Python: the function header is
-    # missing its colon. A bare `return` followed by unreachable text would be
-    # syntactically valid and therefore would correctly produce WRONG_RESULT.
     malformed = "def execute(a, b)\n    return a * b\n"
     ok, reason = verifier.verify_detailed(malformed, [(1.0, 2.0, 2.0)])
     assert not ok
@@ -123,6 +125,26 @@ def test_failed_generation_never_activates_and_records_reason():
     assert failures and "WRONG_RESULT" in failures[-1]
 
 
+def test_ollama_failure_is_preserved_and_dispatcher_surfaces_reason():
+    registry = CapabilityRegistry()
+    parent = make_parent(registry)
+    dispatcher = CapabilityDispatcher(
+        registry,
+        EvolutionEngine(registry, FailingOllama(), Verifier()),
+    )
+    try:
+        dispatcher.execute(
+            "multiply", 2.5, 4.0,
+            ("FloatMultiplication", "float", [(2.5, 4.0, 10.0)]),
+        )
+        assert False, "dispatcher should raise for failed specialization"
+    except RuntimeError as exc:
+        message = str(exc)
+        assert "state=FAILED" in message
+        assert "ConnectionError" in message
+        assert "Ollama server unavailable" in message
+
+
 def test_multiply_request_uses_integer_state_without_ai_then_specializes_float():
     registry = CapabilityRegistry()
     parent = make_parent(registry)
@@ -130,13 +152,11 @@ def test_multiply_request_uses_integer_state_without_ai_then_specializes_float()
     evolution = EvolutionEngine(registry, fake, Verifier())
     dispatcher = CapabilityDispatcher(registry, evolution)
 
-    # Test 1: user requests "multiply" with integers. State 0 handles it directly.
     value, capability = dispatcher.execute("multiply", 6, 7)
     assert value == 42
     assert capability.id == parent.id
     assert fake.prompts == []
 
-    # Test 2: same operation, but float inputs are unsupported. Trigger specialization.
     cases = [(2.5, 4.0, 10.0), (0.5, 0.2, 0.1), (-2.5, 4.0, -10.0)]
     value, capability = dispatcher.execute(
         "multiply", 2.5, 4.0, ("FloatMultiplication", "float", cases)
@@ -146,7 +166,6 @@ def test_multiply_request_uses_integer_state_without_ai_then_specializes_float()
     assert capability.state == "S1"
     assert len(fake.prompts) == 1
 
-    # Test 3: integrated S1 capability is reused without another AI call.
     value2, capability2 = dispatcher.execute(
         "multiply", 3.0, 5.0, ("FloatMultiplication", "float", cases)
     )
