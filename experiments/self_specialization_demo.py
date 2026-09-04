@@ -67,9 +67,9 @@ def main():
         shutil.rmtree(DEMO_STORAGE)
     registry = CapabilityRegistry(storage_dir=DEMO_STORAGE)
 
-    # Initial system: only the programmer-defined integer capability exists.
+    # Initial system: only the programmer-defined State 0 integer capability exists.
     integer = Capability.create(
-        "IntegerMultiplication", "1.0", "S1", ["int", "int"], "int", INTEGER_SOURCE
+        "IntegerMultiplication", "1.0", "S0", ["int", "int"], "int", INTEGER_SOURCE
     )
     registry.register(integer)
 
@@ -77,7 +77,7 @@ def main():
     print("🧬 SPS SELF-SPECIALIZATION — MINIMAL RESEARCH PROTOTYPE")
     print("=" * 72)
     print("Complete research flow:")
-    print("  INTEGER S1 → MISSING FLOAT REQUEST → SERIALIZE/GENERALIZE → S0")
+    print("  INTEGER S0 → MISSING FLOAT REQUEST → SERIALIZE/GENERALIZE → S0")
     print("      → REPLICATE → S0-C → SPECIALIZE WITH OLLAMA/QWEN")
     print("      → VERIFY → FLOAT S1 → LINK UNDER SERIALIZE → PERSIST → REUSE")
     print(f"\nPersistent capability registry: {DEMO_STORAGE}")
@@ -85,11 +85,11 @@ def main():
     print("\n" + "=" * 72)
     print("🔵 PHASE 1 — INITIAL STATE")
     print("=" * 72)
-    print("Capability :", integer.name, "[S1]")
+    print("Capability :", integer.name, "[S0]")
     print("Contract   :", integer.input_types, "->", integer.output_type)
     print("Test       : 6 × 7 =", integer.execute(6, 7))
     print("Parent     : None")
-    print("Hierarchy  : IntegerMultiplication [S1]")
+    print("Hierarchy  : IntegerMultiplication [S0]")
     print("Decision   : No SerializeCapability exists yet.")
 
     engine = EvolutionEngine(registry, OllamaClient(), Verifier())
@@ -103,9 +103,9 @@ def main():
     print("Lookup      : FloatMultiplication is missing.")
     print("\nThe handler/evolution flow is:")
     print("  1. Detect that FloatMultiplication does not exist")
-    print("  2. Serialize/generalize the existing IntegerMultiplication")
+    print("  2. Serialize/generalize the existing IntegerMultiplication [S0]")
     print("  3. Create SerializeCapability [S0] at runtime")
-    print("  4. Reparent the existing IntegerMultiplication under SerializeCapability")
+    print("  4. Reparent the existing IntegerMultiplication [S0] under SerializeCapability")
     print("  5. Create a transient S0-C copy of IntegerMultiplication")
     print("  6. Ollama/Qwen transforms that copy into FloatMultiplication")
     print("  7. Generated code is verified")
@@ -130,6 +130,7 @@ def main():
     print("Created     :", general.name, "[", general.state, "]")
     print("Source      :", integer.name, "(existing capability; same ID preserved)")
     print("Integer ID  :", integer.id)
+    print("Integer state:", integer.state, "(remains State 0)")
     print("Integer now :", integer.parent_id == general.id, "→ child of", general.name)
     print("Event       :", [e.event for e in general.events if e.event == "SERIALIZE"])
 
@@ -155,9 +156,10 @@ def main():
     print_tree(registry, general.id)
     print("\nFinal hierarchy:")
     print("  SerializeCapability [S0]")
-    print("       ├── IntegerMultiplication [S1]")
+    print("       ├── IntegerMultiplication [S0]")
     print("       └── FloatMultiplication [S1]")
     print("\nBefore the float request there was no SerializeCapability node.")
+    print("IntegerMultiplication remains the original State 0 capability; it is only reparented.")
     print("The transient S0-C replication copy is an evolution mechanism, not a final hierarchy node.")
 
     print("\n" + "=" * 72)
@@ -180,6 +182,7 @@ def main():
     print("Same ID       :", reloaded.id == specialized.id)
     print("Parent        :", reloaded_general.name, "[", reloaded_general.state, "]")
     print("Integer child  :", reloaded_registry.get("IntegerMultiplication").parent_id == reloaded_general.id)
+    print("Integer state  :", reloaded_registry.get("IntegerMultiplication").state)
     print("Handler       :", reloaded.inspect_handler())
     print("Reuse test    : 3.0 × 5.0 =", reloaded.execute(3.0, 5.0))
     print("Decision      : Persisted S1 was retrieved; no new specialization was needed.")
@@ -187,19 +190,19 @@ def main():
     print("\n" + "=" * 72)
     print("📋 RESEARCH RESULT")
     print("=" * 72)
-    print("✓ Initial state contains only IntegerMultiplication [S1]")
+    print("✓ Initial state contains only IntegerMultiplication [S0]")
     print("✓ Float request detects the missing typed capability")
-    print("✓ Existing IntegerMultiplication is serialized/generalized at runtime")
+    print("✓ Existing IntegerMultiplication [S0] is serialized/generalized at runtime")
     print("✓ SerializeCapability [S0] is created only at that point")
-    print("✓ Existing IntegerMultiplication is reparented; it is not recreated")
+    print("✓ Existing IntegerMultiplication remains State 0 and is reparented")
     print("✓ A transient S0-C replication copy is created for specialization")
     print("✓ Ollama/Qwen generates the FloatMultiplication specialization")
     print("✓ Generated code passes verification before activation")
     print("✓ FloatMultiplication becomes State S1")
-    print("✓ IntegerMultiplication and FloatMultiplication are siblings under SerializeCapability")
+    print("✓ IntegerMultiplication [S0] and FloatMultiplication [S1] are siblings under SerializeCapability")
     print("✓ S1 source and metadata are persisted")
     print("✓ S1 can be reloaded and reused without another specialization")
-    print("\nSUCCESS: Integer S1 → dynamic Serialize S0 → transient S0-C → Float S1.")
+    print("\nSUCCESS: Integer S0 → dynamic Serialize S0 → transient S0-C → Float S1.")
     return 0
 
 
