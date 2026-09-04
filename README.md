@@ -306,7 +306,7 @@ The generated capability records lifecycle events such as:
 ```text
 REPLICATE
 SPECIALIZE
-aGENERATED
+GENERATED
 VERIFY_PASS
 ACTIVATE
 CHILD_LINK
