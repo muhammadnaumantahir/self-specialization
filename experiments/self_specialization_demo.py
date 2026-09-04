@@ -78,7 +78,7 @@ def main():
     print("=" * 72)
     print("Complete research flow:")
     print("  INTEGER S1 → MISSING FLOAT REQUEST → SERIALIZE/GENERALIZE → S0")
-    print("      → REPlicate → S0-C → SPECIALIZE WITH OLLAMA/QWEN")
+    print("      → REPLICATE → S0-C → SPECIALIZE WITH OLLAMA/QWEN")
     print("      → VERIFY → FLOAT S1 → LINK UNDER SERIALIZE → PERSIST → REUSE")
     print(f"\nPersistent capability registry: {DEMO_STORAGE}")
 
