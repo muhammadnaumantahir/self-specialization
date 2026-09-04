@@ -72,6 +72,24 @@ def test_verifier_accepts_float_and_rejects_unsafe():
     assert not verifier.verify(unsafe, [(1.0, 2.0, 2.0)])
 
 
+def test_verifier_reports_wrong_result():
+    verifier = Verifier()
+    ok, reason = verifier.verify_detailed(
+        "def execute(a, b):\n    return a + b\n",
+        [(2.5, 4.0, 10.0)],
+    )
+    assert not ok
+    assert "WRONG_RESULT" in reason
+    assert verifier.last_error == reason
+
+
+def test_verifier_reports_syntax_error():
+    verifier = Verifier()
+    ok, reason = verifier.verify_detailed("def execute(a, b):\n return\n this is invalid", [(1.0, 2.0, 2.0)])
+    assert not ok
+    assert "syntax error" in reason
+
+
 def test_evolution_activates_only_after_verification():
     registry = CapabilityRegistry()
     parent = make_parent(registry)
@@ -84,6 +102,20 @@ def test_evolution_activates_only_after_verification():
     assert [c.name for c in registry.lineage(result.id)] == [
         "IntegerMultiplication", "IntegerMultiplication-child", "FloatMultiplication"
     ]
+    assert any(e.event == "VERIFY_PASS" and e.detail == "PASS" for e in result.events)
+
+
+def test_failed_generation_never_activates_and_records_reason():
+    registry = CapabilityRegistry()
+    parent = make_parent(registry)
+    bad = "def execute(a, b):\n    return a + b\n"
+    result = EvolutionEngine(registry, FakeOllama(bad), Verifier()).evolve(
+        parent.id, "BadFloatMultiplication", ["float", "float"], "float", [(2.5, 4.0, 10.0)]
+    )
+    assert result.state == "FAILED"
+    assert registry.active(result.id) is None
+    failures = [e.detail for e in result.events if e.event == "VERIFY_FAIL"]
+    assert failures and "WRONG_RESULT" in failures[-1]
 
 
 def test_multiply_request_uses_integer_state_without_ai_then_specializes_float():
@@ -109,21 +141,10 @@ def test_multiply_request_uses_integer_state_without_ai_then_specializes_float()
     assert capability.state == "S1"
     assert len(fake.prompts) == 1
 
-    # Test 3: float capability now exists, so no second specialization is needed.
+    # Test 3: integrated S1 capability is reused without another AI call.
     value2, capability2 = dispatcher.execute(
         "multiply", 3.0, 5.0, ("FloatMultiplication", "float", cases)
     )
     assert value2 == 15.0
     assert capability2.id == capability.id
     assert len(fake.prompts) == 1
-
-
-def test_failed_generation_never_activates():
-    registry = CapabilityRegistry()
-    parent = make_parent(registry)
-    bad = "def execute(a, b):\n    return a + b\n"
-    result = EvolutionEngine(registry, FakeOllama(bad), Verifier()).evolve(
-        parent.id, "BadFloatMultiplication", ["float", "float"], "float", [(2.5, 4.0, 10.0)]
-    )
-    assert result.state == "FAILED"
-    assert registry.active(result.id) is None
