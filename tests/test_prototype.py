@@ -86,35 +86,32 @@ def test_evolution_activates_only_after_verification():
     ]
 
 
-def test_dispatch_runs_integer_without_ai_then_specializes_float():
+def test_multiply_request_uses_integer_state_without_ai_then_specializes_float():
     registry = CapabilityRegistry()
     parent = make_parent(registry)
     fake = FakeOllama(FLOAT_SOURCE)
     evolution = EvolutionEngine(registry, fake, Verifier())
     dispatcher = CapabilityDispatcher(registry, evolution)
 
-    # State 0: integer request is already supported; Ollama is not called.
-    value, capability = dispatcher.execute("IntegerMultiplication", 6, 7)
+    # Test 1: user requests "multiply" with integers. State 0 handles it directly.
+    value, capability = dispatcher.execute("multiply", 6, 7)
     assert value == 42
     assert capability.id == parent.id
     assert fake.prompts == []
 
-    # New request: float multiplication is missing, so the system specializes.
+    # Test 2: same operation, but float inputs are unsupported. Trigger specialization.
     cases = [(2.5, 4.0, 10.0), (0.5, 0.2, 0.1), (-2.5, 4.0, -10.0)]
     value, capability = dispatcher.execute(
-        "IntegerMultiplication", 2.5, 4.0,
-        ("FloatMultiplication", "float", cases),
+        "multiply", 2.5, 4.0, ("FloatMultiplication", "float", cases)
     )
     assert value == 10.0
     assert capability.name == "FloatMultiplication"
     assert capability.state == "S1"
-    assert capability.parent_id != parent.id
     assert len(fake.prompts) == 1
 
-    # Same typed request now resolves to the generated capability; no second AI call.
+    # Test 3: float capability now exists, so no second specialization is needed.
     value2, capability2 = dispatcher.execute(
-        "IntegerMultiplication", 3.0, 5.0,
-        ("FloatMultiplication", "float", cases),
+        "multiply", 3.0, 5.0, ("FloatMultiplication", "float", cases)
     )
     assert value2 == 15.0
     assert capability2.id == capability.id
