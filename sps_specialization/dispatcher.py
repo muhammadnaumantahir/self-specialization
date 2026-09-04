@@ -23,10 +23,7 @@ class CapabilityDispatcher:
         return normalized
 
     def _find_general_parent(self, name):
-        general = self.registry.find(self.GENERAL_PARENT_NAME, active_only=False)
-        if general is not None:
-            return general
-        return self.registry.find(name, active_only=False)
+        return self.registry.find(self.GENERAL_PARENT_NAME, active_only=False)
 
     def _find_executable(self, name, input_types):
         capability = self.registry.find(name, input_types, active_only=False)
@@ -72,13 +69,11 @@ class CapabilityDispatcher:
         target_name, output_type, cases = specialization
         general_parent = self._find_general_parent(name)
         source = self._find_source_for_specialization(name)
-        if general_parent is None:
-            raise LookupError(f"No general parent capability for operation '{name}'")
         if source is None:
             raise LookupError(f"No source capability for specialization of '{name}'")
 
         result = self.evolution_engine.specialize_request(
-            general_parent.id,
+            general_parent.id if general_parent is not None else None,
             target_name,
             input_types,
             output_type,
