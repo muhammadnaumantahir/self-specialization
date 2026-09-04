@@ -4,9 +4,9 @@ from pathlib import Path
 
 
 class CapabilityRegistry:
-    """Runtime capability registry with optional human-readable persistence."""
+    """Runtime capability registry with explicit parent/child hierarchy."""
 
-    SCHEMA_VERSION = 1
+    SCHEMA_VERSION = 2
 
     def __init__(self, storage_dir=None):
         self._caps = {}
@@ -50,9 +50,11 @@ class CapabilityRegistry:
             "input_types": list(capability.input_types),
             "output_type": capability.output_type,
             "parent_id": capability.parent_id,
+            "children_ids": list(capability.children_ids),
             "created_at": capability.created_at,
             "activated_at": capability.activated_at,
             "status": "active" if capability.state == "S1" else capability.state.lower(),
+            "handler": capability.inspect_handler(),
             "source_path": str(source_path),
             "record_path": str(record_path),
             "source_code": capability.source_code,
@@ -61,6 +63,12 @@ class CapabilityRegistry:
 
     def register(self, capability):
         self._caps[capability.id] = capability
+        if capability.parent_id:
+            parent = self._caps.get(capability.parent_id)
+            if parent is not None:
+                parent.add_child(capability.id)
+                if self.storage_dir:
+                    self._persist_capability(parent)
         if self.storage_dir:
             self._persist_capability(capability)
             self.save()
@@ -86,6 +94,8 @@ class CapabilityRegistry:
                     "id": capability.id,
                     "name": capability.name,
                     "state": capability.state,
+                    "parent_id": capability.parent_id,
+                    "children_ids": list(capability.children_ids),
                     "record_path": str(self._paths(capability)[0]),
                     "source_path": str(self._paths(capability)[1]),
                 }
@@ -123,6 +133,7 @@ class CapabilityRegistry:
                 output_type=data["output_type"],
                 source_code=data["source_code"],
                 parent_id=data.get("parent_id"),
+                children_ids=list(data.get("children_ids", [])),
                 created_at=data["created_at"],
                 activated_at=data.get("activated_at"),
                 events=[Event(e["event"], e.get("detail", ""), e["timestamp"]) for e in data.get("events", [])],
@@ -156,6 +167,14 @@ class CapabilityRegistry:
 
     def all(self):
         return list(self._caps.values())
+
+    def children(self, parent_id):
+        parent = self.get(parent_id)
+        return [
+            self._caps[child_id]
+            for child_id in parent.children_ids
+            if child_id in self._caps
+        ]
 
     def find(self, name, input_types=None, active_only=False):
         """Find the newest capability matching a name and optional type contract."""
@@ -196,11 +215,13 @@ class CapabilityRegistry:
             "version": capability.version,
             "state": capability.state,
             "parent_id": capability.parent_id,
+            "children_ids": list(capability.children_ids),
             "created_at": capability.created_at,
             "activated_at": capability.activated_at,
             "input_types": list(capability.input_types),
             "output_type": capability.output_type,
             "source_code": capability.source_code,
+            "handler": capability.inspect_handler(),
             "storage": storage,
             "events": [self._event_to_dict(event) for event in capability.events],
         }
