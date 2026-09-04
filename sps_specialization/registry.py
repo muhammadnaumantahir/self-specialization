@@ -1,4 +1,5 @@
 import json
+import os
 import re
 from pathlib import Path
 
@@ -7,6 +8,8 @@ class CapabilityRegistry:
     """Runtime capability registry with explicit parent/child hierarchy."""
 
     SCHEMA_VERSION = 2
+    DEFAULT_STORAGE_RELATIVE = Path("data") / "capability-registry"
+    STORAGE_ENV_VAR = "SPS_CAPABILITY_REGISTRY_DIR"
 
     def __init__(self, storage_dir=None):
         self._caps = {}
@@ -16,6 +19,24 @@ class CapabilityRegistry:
         if self.storage_dir:
             self._ensure_storage()
             self.load()
+
+    @classmethod
+    def default_storage_dir(cls):
+        """Return the application-owned persistent capability directory.
+
+        SPS_CAPABILITY_REGISTRY_DIR may override the location for local
+        deployments, CI, or experiments without changing application code.
+        """
+        configured = os.environ.get(cls.STORAGE_ENV_VAR)
+        if configured:
+            return Path(configured).expanduser().resolve()
+        project_root = Path(__file__).resolve().parents[1]
+        return project_root / cls.DEFAULT_STORAGE_RELATIVE
+
+    @classmethod
+    def persistent(cls, storage_dir=None):
+        """Create a registry backed by the canonical persistent storage."""
+        return cls(storage_dir if storage_dir is not None else cls.default_storage_dir())
 
     def _ensure_storage(self):
         self.storage_dir.mkdir(parents=True, exist_ok=True)
