@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from sps_specialization.capability import Capability
 from sps_specialization.registry import CapabilityRegistry
 from sps_specialization.replication import ReplicationEngine
@@ -172,3 +174,63 @@ def test_multiply_request_uses_integer_state_without_ai_then_specializes_float()
     assert value2 == 15.0
     assert capability2.id == capability.id
     assert len(fake.prompts) == 1
+
+
+def test_registry_persists_capability_metadata_and_python_source(tmp_path):
+    registry = CapabilityRegistry(storage_dir=tmp_path / "capabilities")
+    parent = make_parent(registry)
+    parent.state = "S1"
+    parent.activated_at = parent.created_at
+    registry.register(parent)
+
+    registry_path = tmp_path / "capabilities" / "registry.json"
+    record_path = tmp_path / "capabilities" / "records" / f"{parent.id}.json"
+    source_dir = tmp_path / "capabilities" / "sources"
+
+    assert registry_path.exists()
+    assert record_path.exists()
+    source_files = list(source_dir.glob(f"{parent.id}_*.py"))
+    assert len(source_files) == 1
+    assert source_files[0].read_text() == INTEGER_SOURCE
+
+
+def test_registry_list_active_get_and_inspect(tmp_path):
+    registry = CapabilityRegistry(storage_dir=tmp_path / "capabilities")
+    parent = make_parent(registry)
+    parent.state = "S1"
+    parent.activated_at = parent.created_at
+    registry.register(parent)
+    failed = Capability.create("FailedCapability", "1.0", "FAILED", ["float", "float"], "float", FLOAT_SOURCE)
+    registry.register(failed)
+
+    assert registry.list_active() == [parent]
+    assert registry.get(parent.id) is parent
+    assert registry.get("IntegerMultiplication") is parent
+
+    inspected = registry.inspect("IntegerMultiplication")
+    assert inspected["id"] == parent.id
+    assert inspected["name"] == "IntegerMultiplication"
+    assert inspected["state"] == "S1"
+    assert inspected["parent_id"] is None
+    assert inspected["storage"]["record"] == str(tmp_path / "capabilities" / "records" / f"{parent.id}.json")
+    assert inspected["storage"]["source"].endswith(f"{parent.id}_IntegerMultiplication.py")
+    assert inspected["source_code"] == INTEGER_SOURCE
+
+
+def test_registry_load_reconstructs_persisted_capability_for_reuse(tmp_path):
+    storage_dir = tmp_path / "capabilities"
+    registry = CapabilityRegistry(storage_dir=storage_dir)
+    parent = make_parent(registry)
+    parent.state = "S1"
+    parent.activated_at = parent.created_at
+    registry.register(parent)
+
+    reloaded = CapabilityRegistry(storage_dir=storage_dir)
+    loaded = reloaded.get(parent.id)
+
+    assert loaded.id == parent.id
+    assert loaded.name == parent.name
+    assert loaded.state == "S1"
+    assert loaded.source_code == INTEGER_SOURCE
+    assert loaded.execute(8, 9) == 72
+    assert reloaded.list_active()[0].id == parent.id
