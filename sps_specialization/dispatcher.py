@@ -1,5 +1,5 @@
 class CapabilityDispatcher:
-    """Resolve a request to an existing executable capability or trigger specialization."""
+    """Resolve requests or trigger self-specialization when a typed capability is missing."""
 
     def __init__(self, registry, evolution_engine):
         self.registry = registry
@@ -32,10 +32,17 @@ class CapabilityDispatcher:
 
     @staticmethod
     def _is_executable(capability):
-        # S0 is the programmer-defined starting capability. S0-C is a
-        # replicated child, and S1 is a verified specialized capability.
-        # All three can execute; GENERATED/FAILED are not executable states.
         return capability is not None and capability.state in {"S0", "S0-C", "S1"}
+
+    @staticmethod
+    def _failure_detail(capability):
+        """Return the most recent failure event so the caller sees the root cause."""
+        if capability is None:
+            return "unknown failure"
+        for event in reversed(capability.events):
+            if event.event in {"FAILED", "VERIFY_FAIL"}:
+                return event.detail or "no failure detail recorded"
+        return "no failure detail recorded"
 
     def _find_executable(self, name, input_types):
         capability = self.registry.find(name, input_types, active_only=False)
@@ -55,9 +62,6 @@ class CapabilityDispatcher:
         """Execute a request such as multiply(6, 7)."""
         input_types = [self._type_name(a), self._type_name(b)]
 
-        # State 0 must be dispatchable even though it is not yet S1. The
-        # registry's ``active`` concept intentionally remains reserved for
-        # verified S1 capabilities.
         capability = self._find_executable(name, input_types)
         if capability is not None:
             return capability.execute(a, b), capability
@@ -74,5 +78,8 @@ class CapabilityDispatcher:
             parent.id, target_name, input_types, output_type, cases
         )
         if result.state != "S1":
-            raise RuntimeError(f"Specialization failed: {result.state}")
+            reason = self._failure_detail(result)
+            raise RuntimeError(
+                f"Specialization failed: state={result.state}; reason={reason}"
+            )
         return result.execute(a, b), result
