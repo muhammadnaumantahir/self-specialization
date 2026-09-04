@@ -16,20 +16,21 @@ class EvolutionEngine:
             generated = SpecializationEngine(self.ollama).specialize(
                 child, target_name, input_types, output_type
             )
-            if self.verifier.verify(generated.source_code, cases):
+            verified, reason = self.verifier.verify_detailed(generated.source_code, cases)
+            if verified:
                 generated.state = "S1"
                 generated.activated_at = generated.created_at
-                generated.record("VERIFY_PASS")
+                generated.record("VERIFY_PASS", reason)
                 generated.record("ACTIVATE", f"target={target_name}")
                 self.registry.register(generated)
             else:
                 generated.state = "FAILED"
-                generated.record("VERIFY_FAIL", f"target={target_name}")
+                generated.record("VERIFY_FAIL", reason)
                 self.registry.register(generated)
             return generated
         except Exception as exc:
             child.state = "FAILED"
-            child.record("FAILED", str(exc))
+            child.record("FAILED", f"{type(exc).__name__}: {exc}")
             return child
 
     def specialize_request(self, parent_id, target_name, input_types, output_type, cases):
