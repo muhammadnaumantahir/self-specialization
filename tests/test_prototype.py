@@ -139,6 +139,26 @@ def test_ollama_failure_is_preserved_and_actionable():
     assert registry.active(result.id) is None
 
 
+def test_dispatcher_surfaces_specialization_failure_reason():
+    registry = CapabilityRegistry()
+    parent = make_parent(registry)
+    dispatcher = CapabilityDispatcher(
+        registry,
+        EvolutionEngine(registry, FailingOllama(), Verifier()),
+    )
+    try:
+        dispatcher.execute(
+            "multiply", 2.5, 4.0,
+            ("FloatMultiplication", "float", [(2.5, 4.0, 10.0)]),
+        )
+        assert False, "dispatcher should raise for failed specialization"
+    except RuntimeError as exc:
+        message = str(exc)
+        assert "FAILED" in message
+        assert "ConnectionError" in message
+        assert "Ollama server unavailable" in message
+
+
 def test_multiply_request_uses_integer_state_without_ai_then_specializes_float():
     registry = CapabilityRegistry()
     parent = make_parent(registry)
