@@ -85,9 +85,14 @@ def test_verifier_reports_wrong_result():
 
 def test_verifier_reports_syntax_error():
     verifier = Verifier()
-    ok, reason = verifier.verify_detailed("def execute(a, b):\n return\n this is invalid", [(1.0, 2.0, 2.0)])
+    # This fixture is intentionally malformed Python: the function header is
+    # missing its colon. A bare `return` followed by unreachable text would be
+    # syntactically valid and therefore would correctly produce WRONG_RESULT.
+    malformed = "def execute(a, b)\n    return a * b\n"
+    ok, reason = verifier.verify_detailed(malformed, [(1.0, 2.0, 2.0)])
     assert not ok
-    assert "syntax error" in reason
+    assert "syntax error" in reason.lower()
+    assert verifier.last_error == reason
 
 
 def test_evolution_activates_only_after_verification():
