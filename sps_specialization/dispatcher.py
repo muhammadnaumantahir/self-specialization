@@ -1,5 +1,7 @@
 class CapabilityDispatcher:
-    """Resolve requests or trigger the S0 -> S0-C -> S1 evolution flow."""
+    """Resolve typed requests and trigger specialization under the general capability."""
+
+    GENERAL_PARENT_NAME = "SerializeCapability"
 
     def __init__(self, registry, evolution_engine):
         self.registry = registry
@@ -20,20 +22,11 @@ class CapabilityDispatcher:
             return "multiply"
         return normalized
 
-    def _find_parent(self, name):
-        parent = self.registry.find(name, active_only=False)
-        if parent is not None:
-            return parent
-
-        alias = self._operation_alias(name)
-        for capability in self.registry.all():
-            if self._operation_alias(capability.name) == alias and capability.state in {"S0", "S1"}:
-                return capability
-        return None
-
-    @staticmethod
-    def _is_executable(capability):
-        return capability is not None and capability.state in {"S0", "S0-C", "S1"}
+    def _find_general_parent(self, name):
+        general = self.registry.find(self.GENERAL_PARENT_NAME, active_only=False)
+        if general is not None:
+            return general
+        return self.registry.find(name, active_only=False)
 
     def _find_executable(self, name, input_types):
         capability = self.registry.find(name, input_types, active_only=False)
@@ -49,6 +42,20 @@ class CapabilityDispatcher:
         ]
         return candidates[-1] if candidates else None
 
+    def _find_source_for_specialization(self, name):
+        alias = self._operation_alias(name)
+        candidates = [
+            c for c in self.registry.all()
+            if self._operation_alias(c.name) == alias
+            and c.state in {"S0", "S1"}
+            and c.name != self.GENERAL_PARENT_NAME
+        ]
+        return candidates[-1] if candidates else None
+
+    @staticmethod
+    def _is_executable(capability):
+        return capability is not None and capability.state in {"S0", "S0-C", "S1"}
+
     def execute(self, name, a, b, specialization=None):
         """Execute a request such as multiply(6, 7)."""
         input_types = [self._type_name(a), self._type_name(b)]
@@ -63,12 +70,20 @@ class CapabilityDispatcher:
             )
 
         target_name, output_type, cases = specialization
-        parent = self._find_parent(name)
-        if parent is None:
-            raise LookupError(f"No parent capability for operation '{name}'")
+        general_parent = self._find_general_parent(name)
+        source = self._find_source_for_specialization(name)
+        if general_parent is None:
+            raise LookupError(f"No general parent capability for operation '{name}'")
+        if source is None:
+            raise LookupError(f"No source capability for specialization of '{name}'")
 
         result = self.evolution_engine.specialize_request(
-            parent.id, target_name, input_types, output_type, cases
+            general_parent.id,
+            target_name,
+            input_types,
+            output_type,
+            cases,
+            source_capability_id=source.id,
         )
         if result.state != "S1":
             failure_events = [
