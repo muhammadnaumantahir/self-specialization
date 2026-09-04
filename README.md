@@ -1,100 +1,165 @@
 # SPS Self-Specialization Prototype
 
-A minimal research prototype demonstrating how a general capability can manage specialized child capabilities and how a missing capability can be created through **replication → AI-assisted specialization → verification → activation**.
+A minimal research prototype demonstrating how an existing capability can generate a copy of itself and how that copy can be transformed into a specialized capability.
 
-This prototype intentionally focuses on the small concept described by the research problem. It does **not** attempt to implement the full SPS ten-layer architecture.
+The prototype intentionally focuses on the small concept from the research problem. It does **not** attempt to implement the full SPS ten-layer architecture.
 
 ## Research idea
 
-The experiment demonstrates two related abilities:
+The experiment demonstrates two fundamental abilities:
 
-1. A capability family can have a **general parent** that manages specialized capabilities.
-2. When a required specialization does not exist, an existing capability can be **replicated into a transient S0-C copy**, transformed by an external reasoning/code-generation model, verified, and activated as a new S1 capability.
+1. A capability can generate a transient copy of itself.
+2. That generated copy can be transformed into a specialized capability.
 
-The important distinction is:
-
-```text
-Replication = system mechanism
-Specialization = transformation/reasoning process
-Ollama + Qwen = external brain used for code generation
-Verification = gate before activation
-Capability Handler = runtime owner of execution/resources/lifecycle
-Registry = persistent capability knowledge
-```
-
-## Complete experiment flow
+The important lifecycle is:
 
 ```text
-                         GENERAL CAPABILITY
-                       SerializeCapability [S0]
-                                │
-              ┌─────────────────┴─────────────────┐
-              │                                   │
-              ▼                                   ▼
-     IntegerMultiplication [S1]          FloatMultiplication [S1]
-          statically defined                 generated at runtime
-
-Missing float request:
-
-SerializeCapability [S0]
+IntegerMultiplication [S1]
         │
-        │ detect missing [float, float] → float
+        │ Float request arrives
         ▼
-IntegerMultiplication [S1]  ← source capability
+FloatMultiplication missing
         │
-        │ REPLICATE
+        ▼
+Serialize/generalize existing IntegerMultiplication
+        │
+        ├── create SerializeCapability [S0] dynamically
+        └── reparent existing IntegerMultiplication under it
+        │
+        ▼
+replicate IntegerMultiplication
+        │
         ▼
 Transient copy [S0-C]
         │
-        │ SPECIALIZE
         ▼
-Ollama + Qwen Coder
+Ollama + Qwen Coder specialization
         │
-        │ generate Python execute(a, b)
         ▼
-Generated FloatMultiplication [GENERATED]
+FloatMultiplication [GENERATED]
         │
-        │ VERIFY
-        ├── syntax / AST policy
-        └── functional test cases
+        ▼
+verification
         │
         ▼
 FloatMultiplication [S1]
         │
-        │ link to general parent
         ▼
-SerializeCapability [S0]
-        │
-        └── FloatMultiplication [S1]
+link under SerializeCapability
 ```
 
-### Final capability hierarchy
+**Critical design rule:** `SerializeCapability` does **not** exist in the initial state. It is created only when the system needs a generalization boundary for the missing specialization.
 
-The **persistent hierarchy is intentionally not**:
+## Before and after
+
+### Initial state
+
+Only the programmer-defined capability exists:
 
 ```text
-IntegerMultiplication
-        └── IntegerMultiplication-child
-                └── FloatMultiplication
+IntegerMultiplication [S1]
 ```
 
-Instead it is:
+There is no `SerializeCapability` node and no float capability.
+
+### After a float request
+
+A request such as:
 
 ```text
-                    SerializeCapability [S0]
-                              │
-                 ┌────────────┴────────────┐
-                 │                         │
-                 ▼                         ▼
-       IntegerMultiplication       FloatMultiplication
-               [S1]                       [S1]
+multiply(2.5, 4.0)
 ```
 
-The S0-C copy is an internal evolution artifact. It proves the replication step without becoming a misleading permanent parent in the capability hierarchy.
+requires `[float, float] -> float`. The system cannot find an active capability for that contract, so it begins evolution.
+
+The final persistent hierarchy is:
+
+```text
+              SerializeCapability [S0]
+                        │
+               ┌────────┴────────┐
+               ▼                 ▼
+ IntegerMultiplication    FloatMultiplication
+        [S1]                    [S1]
+```
+
+The existing `IntegerMultiplication` object keeps the **same ID** and is reparented. It is not recreated.
+
+The transient `S0-C` copy is not stored as a final hierarchy node.
+
+## Complete runtime sequence
+
+```text
+1. IntegerMultiplication [S1] exists
+2. User requests float multiplication
+3. Dispatcher detects FloatMultiplication is missing
+4. Existing IntegerMultiplication is selected as the source
+5. System serializes/generalizes that source
+6. SerializeCapability [S0] is created at runtime
+7. Existing IntegerMultiplication is reparented under SerializeCapability
+8. IntegerMultiplication is replicated into transient S0-C
+9. Ollama/Qwen transforms the copy into FloatMultiplication
+10. Generated source enters GENERATED state
+11. Verifier checks syntax/policy and functional cases
+12. Verified result becomes FloatMultiplication [S1]
+13. FloatMultiplication is linked directly under SerializeCapability
+14. S1 metadata/source are persisted
+15. Later float requests reuse the persisted S1 capability
+```
+
+## Why serialization/generalization exists
+
+The prototype uses `SerializeCapability` as the dynamically created general boundary for a capability family.
+
+It is **not** a pre-installed parent. Its creation is itself part of the evolution event:
+
+```text
+existing capability
+      ↓
+SERIALIZE / GENERALIZE
+      ↓
+new S0 general capability
+      ↓
+existing capability becomes child
+```
+
+This makes the hierarchy reflect what actually happened at runtime instead of presenting a general parent that was secretly present from the beginning.
+
+## State model
+
+| State | Meaning |
+|---|---|
+| `S0` | General/static capability state |
+| `S0-C` | Transient replicated copy used during specialization |
+| `GENERATED` | Source generated but not yet activated |
+| `S1` | Verified and active specialized capability |
+| `FAILED` | Generation or verification failed |
+
+The specialization path is therefore:
+
+```text
+S1 existing source
+   │
+   │ serialize/generalize
+   ▼
+S0 general parent
+   │
+   │ replicate
+   ▼
+S0-C transient copy
+   │
+   │ specialize with external brain
+   ▼
+GENERATED
+   │
+   │ verify
+   ▼
+S1 new specialization
+```
 
 ## Capability Handler
 
-Each capability has an explicit `CapabilityHandler` responsible for the runtime concerns of that capability.
+Each capability has an explicit `CapabilityHandler` responsible for runtime concerns of that capability:
 
 ```text
 Capability
@@ -110,67 +175,30 @@ Capability
           └── execution
 ```
 
-The handler answers the research question: **when a capability exists, where is its handling and what does it own?**
+The handler answers the research question: **when a generated capability exists, where is its handling and what does it own?**
 
-The handler is deliberately lightweight. It is not a process supervisor or security sandbox. It owns the execution-facing runtime state needed by this prototype.
-
-## State model
-
-| State | Meaning |
-|---|---|
-| `S0` | General/static capability state |
-| `S0-C` | Transient replicated copy used during specialization |
-| `GENERATED` | Source generated but not yet activated |
-| `S1` | Verified and active specialized capability |
-| `FAILED` | Generation or verification failed |
-
-The core transition is:
-
-```text
-S0
- │
- │ missing capability detected
- ▼
-replicate
- │
- ▼
-S0-C
- │
- │ AI-assisted specialization
- ▼
-GENERATED
- │
- │ verification
- ▼
-S1
-```
-
-For the final hierarchy, the generated S1 capability is linked directly to the general `SerializeCapability` parent.
+The handler is deliberately lightweight. It is not a process supervisor or production security sandbox.
 
 ## Concrete example
 
-The prototype starts with:
-
-```text
-SerializeCapability [S0]
-        │
-        └── IntegerMultiplication [S1]
-```
-
-The integer capability is statically supplied by the programmer:
+The programmer initially supplies:
 
 ```python
 def execute(a: int, b: int) -> int:
     return a * b
 ```
 
-The request:
+as:
 
 ```text
-multiply(6, 7)
+IntegerMultiplication [S1]
 ```
 
-is already supported, so the system executes the existing capability. **No AI call is required.**
+An integer request is handled directly and does not require AI:
+
+```text
+multiply(6, 7) → 42
+```
 
 Then the system receives:
 
@@ -178,110 +206,85 @@ Then the system receives:
 multiply(2.5, 4.0)
 ```
 
-Required contract:
+The required contract is:
 
 ```text
 [float, float] -> float
 ```
 
-No active capability matches that contract, so the evolution process starts.
+No active capability matches it. The source capability is generalized, producing `SerializeCapability [S0]`, and the original integer capability is moved under it. A transient copy is then specialized by Ollama/Qwen.
 
-The external model is asked to transform the replicated integer capability into a float-specialized capability. For the experiment, the expected generated function is equivalent to:
+The expected generated implementation is equivalent to:
 
 ```python
 def execute(a: float, b: float) -> float:
     return a * b
 ```
 
-The generated code is **not activated immediately**. It first passes syntax/policy checks and functional test cases.
+Generated code is not activated immediately. It must first pass verification.
 
-After verification:
-
-```text
-SerializeCapability [S0]
-        ├── IntegerMultiplication [S1]
-        └── FloatMultiplication [S1]
-```
-
-The float capability can then be reused without another AI generation step.
-
-## Role of each component
+## Component responsibilities
 
 ### `SerializeCapability`
 
-The general/root capability for the experiment. It represents the capability family and becomes the parent of specialized capabilities.
+A general capability created **on demand** when a missing specialization requires a family/generalization boundary.
 
 ### `IntegerMultiplication`
 
-The statically programmed source capability. It provides the existing implementation from which a missing multiplication specialization can be derived.
+The statically programmed source capability. It supplies the implementation that can be copied and specialized.
 
 ### `CapabilityHandler`
 
 The runtime owner of execution and lightweight capability resources.
 
+### `CapabilityRegistry`
+
+Stores capability identity, contracts, parent/child relationships, events, source code and handler metadata. It also supports lookup, inspection, lineage, persistence, reload and reparenting.
+
 ### `ReplicationEngine`
 
-Creates the transient `S0-C` copy used by the specialization process. The copy is an evolution artifact rather than a permanent hierarchy node.
+Creates the transient `S0-C` copy. This copy is an evolution artifact, not a permanent capability-family node.
 
 ### `SpecializationEngine`
 
-Builds the specialization request and asks the external model to generate the target implementation.
+Asks the external model to transform the replicated implementation into the target specialization.
 
 ### `OllamaClient`
 
-Connects to the local Ollama server. The default model is `qwen2.5-coder:7b`.
+Connects to local Ollama. The default model is `qwen2.5-coder:7b`.
 
 ### `Verifier`
 
-Checks generated source before activation. The prototype applies AST-level restrictions and executes functional test cases in a separate Python process with a timeout.
-
-### `CapabilityRegistry`
-
-Stores capability identity, contracts, parent/child relationships, events, source code and handler metadata. It also supports lookup, inspection, lineage and reload.
-
-### `CapabilityDispatcher`
-
-Receives typed requests, chooses an existing capability when possible, and triggers specialization when the requested typed capability is missing.
+Checks generated source before activation using syntax/AST restrictions and functional test cases.
 
 ### `EvolutionEngine`
 
-Coordinates the runtime sequence:
+Coordinates serialization/generalization, reparenting, replication, AI specialization, verification and activation.
+
+### `CapabilityDispatcher`
+
+Receives typed requests, chooses an existing capability when possible, and triggers evolution when the requested typed capability is missing.
+
+## Event trace
+
+The dynamic generalization is observable through events such as:
 
 ```text
-source capability
-      ↓
-transient replication
-      ↓
-AI specialization
-      ↓
-verification
-      ↓
-S1 activation
-      ↓
-direct link to general parent
+SERIALIZE
+REPARENT
+REPLICATE
+SPECIALIZE
+GENERATED
+VERIFY_PASS
+ACTIVATE
+CHILD_LINK
 ```
 
-## Capability Handler and resources
-
-A handler exposes serializable information such as:
-
-```json
-{
-  "capability_id": "...",
-  "status": "ready",
-  "resources": {
-    "source_code": "...",
-    "input_types": ["float", "float"],
-    "output_type": "float"
-  }
-}
-```
-
-Runtime-only callable state is kept inside the handler and is reconstructed from persisted source when a capability is reloaded.
+The events are persisted with capability metadata and exposed through `registry.inspect()`.
 
 ## Persistence
 
-The registry writes three useful artifacts:
+The registry writes:
 
 ```text
 /tmp/sps-capability-registry/
@@ -295,44 +298,29 @@ The registry writes three useful artifacts:
     └── ...
 ```
 
-The JSON record contains the capability contract, state, parent/child relationship, events and handler metadata. The Python file contains the executable source.
+The JSON record contains state, contracts, relationships, events and handler metadata. The Python file contains executable source.
 
-A new registry instance can reload the persisted S1 capability and execute it without calling Ollama again.
-
-## Event trace
-
-The generated capability records lifecycle events such as:
-
-```text
-REPLICATE
-SPECIALIZE
-GENERATED
-VERIFY_PASS
-ACTIVATE
-CHILD_LINK
-```
-
-The actual event list is stored with the capability record and is available through `registry.inspect()`.
+After reload, the S1 float capability can be reused without another AI generation step.
 
 ## Project layout
 
 ```text
 sps_specialization/
 ├── capability.py       # capability contract and lifecycle
-├── handler.py          # explicit runtime capability handler
-├── registry.py         # lookup, hierarchy and persistence
+├── handler.py          # runtime capability handler
+├── registry.py         # lookup, hierarchy, persistence, reparenting
 ├── replication.py      # transient S0-C replication
-├── specialization.py   # AI-assisted source specialization
+├── specialization.py   # AI-assisted specialization
 ├── ollama_client.py    # local Ollama adapter
 ├── verifier.py         # generated-code verification
-├── evolution.py        # replication → specialization → verification
+├── evolution.py        # dynamic generalization + evolution flow
 └── dispatcher.py       # typed request routing
 
 experiments/
-└── self_specialization_demo.py  # complete research demonstration
+└── self_specialization_demo.py
 
 tests/
-└── test_prototype.py             # deterministic tests using fake Ollama
+└── test_prototype.py
 
 colab/
 └── SPS_Self_Specialization_Test.ipynb
@@ -340,27 +328,28 @@ colab/
 
 ## Deterministic tests
 
-The test suite does not require Ollama:
+The tests do not require Ollama:
 
 ```bash
 pip install -r requirements.txt
 PYTHONPATH=. pytest -q
 ```
 
-The tests cover:
+Coverage includes:
 
-- S0 integer execution
-- S0-C replication
+- initial integer capability
+- transient S0-C replication
 - generated float specialization
-- generated-source normalization
+- source normalization
 - verifier acceptance/rejection
-- verification failure diagnostics
+- verification diagnostics
 - Ollama failure diagnostics
 - dispatcher reuse vs specialization
-- capability handler execution/resources
-- general-parent hierarchy
-- sibling specialized capabilities
-- registry persistence
+- **dynamic creation of SerializeCapability**
+- **reparenting the existing IntegerMultiplication without changing its ID**
+- **final sibling hierarchy**
+- handler execution/resources
+- persistence
 - reload and reuse
 
 ## Local Ollama experiment
@@ -379,18 +368,18 @@ ollama pull qwen2.5-coder:7b
 export OLLAMA_MODEL=qwen2.5-coder:7b
 ```
 
-Then run:
+Then:
 
 ```bash
 cd self-specialization
 PYTHONPATH=. python experiments/self_specialization_demo.py
 ```
 
-The demo shows the complete runtime flow, final hierarchy, handler information, generated source, event trace, persistence paths, reload and reuse.
+The demo prints both the initial state and the final hierarchy so the dynamic creation of `SerializeCapability` is visible.
 
 ## Google Colab
 
-Use a fresh clone so an older repository copy cannot shadow the current code:
+Use a fresh clone:
 
 ```python
 %cd /content
@@ -409,6 +398,8 @@ Start Ollama from `/content` before deleting/recloning the repository:
 !apt-get update -qq
 !apt-get install -y -qq zstd curl
 !curl -fsSL https://ollama.com/install.sh | sh
+!pkill -9 ollama || true
+!pkill -9 llama-server || true
 !nohup ollama serve >/tmp/ollama.log 2>&1 &
 !sleep 5
 !ollama --version
@@ -435,40 +426,46 @@ It intentionally excludes:
 - paid credentials
 - a production security sandbox
 - unrestricted autonomous code execution
-- process/resource isolation beyond the prototype verifier
 
 The research target is deliberately narrow:
 
-> **Can a general capability manage specialized children, and can a missing specialization be created by replicating an existing capability, transforming the copy with an external AI model, verifying it, and activating it as a reusable capability?**
+> **Can an existing capability create a generalization boundary on demand, generate a copy of itself, transform that copy with an external AI model, verify the result, and activate the specialization as a reusable sibling capability?**
 
-## Research contribution of this prototype
+## Research observation
 
-The prototype makes the proposed concept observable rather than leaving it as a theoretical diagram:
+The most important architectural observation is:
 
 ```text
-GENERAL CAPABILITY
-       ↓
-CAPABILITY HANDLER
-       ↓
-MISSING CAPABILITY DETECTION
-       ↓
-REPLICATION (S0-C)
-       ↓
-AI-ASSISTED SPECIALIZATION
-       ↓
-GENERATED SOURCE
-       ↓
-VERIFICATION
-       ↓
-ACTIVATION (S1)
-       ↓
-PARENT/CHILD REGISTRATION
-       ↓
-PERSISTENCE
-       ↓
-RELOAD
-       ↓
-REUSE
+INITIAL
+IntegerMultiplication [S1]
+
+REQUEST
+FloatMultiplication missing
+
+EVOLUTION
+IntegerMultiplication
+        ↓
+Serialize/generalize
+        ↓
+SerializeCapability [S0]
+        ↓
+reparent existing IntegerMultiplication
+        ↓
+replicate → S0-C
+        ↓
+specialize with Qwen
+        ↓
+verify
+        ↓
+FloatMultiplication [S1]
+
+FINAL
+              SerializeCapability [S0]
+                        │
+               ┌────────┴────────┐
+               ▼                 ▼
+ IntegerMultiplication    FloatMultiplication
+        [S1]                    [S1]
 ```
 
-The key research observation is that **the specialized capability becomes a managed child of the general capability**, while replication remains an internal mechanism used to produce the specialization.
+This keeps the **copy** as a transformation mechanism and the **general capability** as a runtime-created family boundary. That distinction is the core correction implemented by this iteration.
