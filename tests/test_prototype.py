@@ -36,6 +36,19 @@ def make_parent(registry=None):
     return parent
 
 
+def make_hierarchy(registry):
+    general = Capability.create(
+        "SerializeCapability", "1.0", "S0", ["Any", "Any"], "Any", SERIALIZE_SOURCE
+    )
+    integer = Capability.create(
+        "IntegerMultiplication", "1.0", "S1", ["int", "int"], "int", INTEGER_SOURCE,
+        parent_id=general.id,
+    )
+    registry.register(general)
+    registry.register(integer)
+    return general, integer
+
+
 def test_state_0_integer_multiplication():
     parent = make_parent()
     assert parent.state == "S0"
@@ -103,25 +116,31 @@ def test_verifier_reports_syntax_error():
 
 def test_evolution_activates_only_after_verification():
     registry = CapabilityRegistry()
-    parent = make_parent(registry)
+    general, integer = make_hierarchy(registry)
     result = EvolutionEngine(registry, FakeOllama(FLOAT_SOURCE), Verifier()).evolve(
-        parent.id, "FloatMultiplication", ["float", "float"], "float", [(2.5, 4.0, 10.0)]
+        general.id, "FloatMultiplication", ["float", "float"], "float",
+        [(2.5, 4.0, 10.0)], source_capability_id=integer.id
     )
     assert result.state == "S1"
     assert result.execute(2.5, 4.0) == 10.0
     assert registry.active(result.id) is result
     assert [c.name for c in registry.lineage(result.id)] == [
-        "IntegerMultiplication", "IntegerMultiplication-child", "FloatMultiplication"
+        "SerializeCapability", "FloatMultiplication"
     ]
+    assert [c.name for c in registry.children(general.id)] == [
+        "IntegerMultiplication", "FloatMultiplication"
+    ]
+    assert not any(c.name.endswith("-copy") for c in registry.all())
     assert any(e.event == "VERIFY_PASS" and e.detail == "PASS" for e in result.events)
 
 
 def test_failed_generation_never_activates_and_records_reason():
     registry = CapabilityRegistry()
-    parent = make_parent(registry)
+    general, integer = make_hierarchy(registry)
     bad = "def execute(a, b):\n    return a + b\n"
     result = EvolutionEngine(registry, FakeOllama(bad), Verifier()).evolve(
-        parent.id, "BadFloatMultiplication", ["float", "float"], "float", [(2.5, 4.0, 10.0)]
+        general.id, "BadFloatMultiplication", ["float", "float"], "float",
+        [(2.5, 4.0, 10.0)], source_capability_id=integer.id
     )
     assert result.state == "FAILED"
     assert registry.active(result.id) is None
@@ -131,7 +150,7 @@ def test_failed_generation_never_activates_and_records_reason():
 
 def test_ollama_failure_is_preserved_and_dispatcher_surfaces_reason():
     registry = CapabilityRegistry()
-    parent = make_parent(registry)
+    make_hierarchy(registry)
     dispatcher = CapabilityDispatcher(
         registry,
         EvolutionEngine(registry, FailingOllama(), Verifier()),
@@ -151,14 +170,14 @@ def test_ollama_failure_is_preserved_and_dispatcher_surfaces_reason():
 
 def test_multiply_request_uses_integer_state_without_ai_then_specializes_float():
     registry = CapabilityRegistry()
-    parent = make_parent(registry)
+    general, integer = make_hierarchy(registry)
     fake = FakeOllama(FLOAT_SOURCE)
     evolution = EvolutionEngine(registry, fake, Verifier())
     dispatcher = CapabilityDispatcher(registry, evolution)
 
     value, capability = dispatcher.execute("multiply", 6, 7)
     assert value == 42
-    assert capability.id == parent.id
+    assert capability.id == integer.id
     assert fake.prompts == []
 
     cases = [(2.5, 4.0, 10.0), (0.5, 0.2, 0.1), (-2.5, 4.0, -10.0)]
@@ -168,6 +187,7 @@ def test_multiply_request_uses_integer_state_without_ai_then_specializes_float()
     assert value == 10.0
     assert capability.name == "FloatMultiplication"
     assert capability.state == "S1"
+    assert capability.parent_id == general.id
     assert len(fake.prompts) == 1
 
     value2, capability2 = dispatcher.execute(
@@ -241,13 +261,15 @@ def test_registry_load_reconstructs_persisted_capability_for_reuse(tmp_path):
 def test_evolution_persists_generated_state_1_artifact(tmp_path):
     storage_dir = tmp_path / "capabilities"
     registry = CapabilityRegistry(storage_dir=storage_dir)
-    parent = make_parent(registry)
+    general, integer = make_hierarchy(registry)
     result = EvolutionEngine(registry, FakeOllama(FLOAT_SOURCE), Verifier()).evolve(
-        parent.id, "FloatMultiplication", ["float", "float"], "float", [(2.5, 4.0, 10.0)]
+        general.id, "FloatMultiplication", ["float", "float"], "float",
+        [(2.5, 4.0, 10.0)], source_capability_id=integer.id
     )
 
     inspected = registry.inspect(result.id)
     assert result.state == "S1"
+    assert result.parent_id == general.id
     assert Path(inspected["storage"]["record"]).exists()
     assert Path(inspected["storage"]["source"]).read_text() == FLOAT_SOURCE
     assert registry.get("FloatMultiplication").execute(2.5, 4.0) == 10.0
@@ -267,21 +289,14 @@ def test_capability_handler_owns_execution_and_resources():
 
 def test_general_serialize_capability_is_root_of_specialized_children():
     registry = CapabilityRegistry()
-    general = Capability.create(
-        "SerializeCapability", "1.0", "S0", ["Any", "Any"], "Any", SERIALIZE_SOURCE
-    )
-    integer = Capability.create(
-        "IntegerMultiplication", "1.0", "S1", ["int", "int"], "int", INTEGER_SOURCE,
-        parent_id=general.id,
-    )
+    general, integer = make_hierarchy(registry)
     floating = Capability.create(
         "FloatMultiplication", "1.0", "S1", ["float", "float"], "float", FLOAT_SOURCE,
         parent_id=general.id,
     )
-    registry.register(general)
-    registry.register(integer)
     registry.register(floating)
 
+    assert general.state == "S0"
     assert integer.parent_id == general.id
     assert floating.parent_id == general.id
     assert [cap.name for cap in registry.children(general.id)] == [
@@ -297,17 +312,10 @@ def test_general_serialize_capability_is_root_of_specialized_children():
 
 def test_specialized_capabilities_are_siblings_not_nested_replication_children():
     registry = CapabilityRegistry()
-    general = Capability.create(
-        "SerializeCapability", "1.0", "S0", ["Any", "Any"], "Any", SERIALIZE_SOURCE
-    )
-    integer = Capability.create(
-        "IntegerMultiplication", "1.0", "S1", ["int", "int"], "int", INTEGER_SOURCE,
-        parent_id=general.id,
-    )
-    registry.register(general)
-    registry.register(integer)
+    general, integer = make_hierarchy(registry)
     result = EvolutionEngine(registry, FakeOllama(FLOAT_SOURCE), Verifier()).evolve(
-        general.id, "FloatMultiplication", ["float", "float"], "float", [(2.5, 4.0, 10.0)]
+        general.id, "FloatMultiplication", ["float", "float"], "float",
+        [(2.5, 4.0, 10.0)], source_capability_id=integer.id
     )
 
     assert result.state == "S1"
@@ -316,6 +324,7 @@ def test_specialized_capabilities_are_siblings_not_nested_replication_children()
         "IntegerMultiplication", "FloatMultiplication"
     ]
     assert not any(cap.name == "IntegerMultiplication-child" for cap in registry.all())
+    assert not any(cap.name == "IntegerMultiplication-copy" for cap in registry.all())
     assert [cap.name for cap in registry.lineage(result.id)] == [
         "SerializeCapability", "FloatMultiplication"
     ]
