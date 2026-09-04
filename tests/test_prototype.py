@@ -234,3 +234,18 @@ def test_registry_load_reconstructs_persisted_capability_for_reuse(tmp_path):
     assert loaded.source_code == INTEGER_SOURCE
     assert loaded.execute(8, 9) == 72
     assert reloaded.list_active()[0].id == parent.id
+
+
+def test_evolution_persists_generated_state_1_artifact(tmp_path):
+    storage_dir = tmp_path / "capabilities"
+    registry = CapabilityRegistry(storage_dir=storage_dir)
+    parent = make_parent(registry)
+    result = EvolutionEngine(registry, FakeOllama(FLOAT_SOURCE), Verifier()).evolve(
+        parent.id, "FloatMultiplication", ["float", "float"], "float", [(2.5, 4.0, 10.0)]
+    )
+
+    inspected = registry.inspect(result.id)
+    assert result.state == "S1"
+    assert Path(inspected["storage"]["record"]).exists()
+    assert Path(inspected["storage"]["source"]).read_text() == FLOAT_SOURCE
+    assert registry.get("FloatMultiplication").execute(2.5, 4.0) == 10.0
