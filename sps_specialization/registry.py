@@ -74,6 +74,28 @@ class CapabilityRegistry:
             self.save()
         return capability
 
+    def reparent(self, capability_id, new_parent_id):
+        """Move an existing capability under a newly created parent without cloning it."""
+        capability = self.get(capability_id)
+        new_parent = self.get(new_parent_id)
+        old_parent = self._caps.get(capability.parent_id) if capability.parent_id else None
+
+        if old_parent is not None and capability.id in old_parent.children_ids:
+            old_parent.children_ids.remove(capability.id)
+            old_parent.record("CHILD_UNLINK", f"child={capability.id}")
+
+        capability.parent_id = new_parent.id
+        capability.record("REPARENT", f"parent={new_parent.id}")
+        new_parent.add_child(capability.id)
+
+        if self.storage_dir:
+            if old_parent is not None:
+                self._persist_capability(old_parent)
+            self._persist_capability(capability)
+            self._persist_capability(new_parent)
+            self.save()
+        return capability
+
     def _persist_capability(self, capability):
         self._ensure_storage()
         record_path, source_path = self._paths(capability)
