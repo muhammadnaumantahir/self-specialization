@@ -21,6 +21,12 @@ def print_lineage(registry, capability_id):
         print(f"  {cap.name} [{cap.state}] id={cap.id} parent={cap.parent_id}")
 
 
+def print_events(capability):
+    print("\n[EVENTS]")
+    for event in capability.events:
+        print(f"  {event.event}: {event.detail}")
+
+
 def main():
     registry = CapabilityRegistry()
     parent = Capability.create(
@@ -35,29 +41,38 @@ def main():
     print("Contract:", parent.input_types, "->", parent.output_type)
     print("6 * 7 =", parent.execute(6, 7))
 
-    print("\n" + "=" * 72)
-    print("RUNTIME REQUEST — INTEGER")
-    print("=" * 72)
     engine = EvolutionEngine(registry, OllamaClient(), Verifier())
     dispatcher = CapabilityDispatcher(registry, engine)
-    value, cap = dispatcher.execute("IntegerMultiplication", 8, 9)
+
+    print("\n" + "=" * 72)
+    print("USER INPUT — INTEGER")
+    print("=" * 72)
+    print("Request: multiply(8, 9)")
+    value, cap = dispatcher.execute("multiply", 8, 9)
     print("Resolved capability:", cap.name)
-    print("8 * 9 =", value)
+    print("State:", cap.state)
+    print("Result:", value)
     print("Ollama is not needed because State 0 already supports int × int.")
 
     print("\n" + "=" * 72)
-    print("RUNTIME REQUEST — FLOAT (MISSING CAPABILITY)")
+    print("USER INPUT — FLOAT (MISSING CAPABILITY)")
     print("=" * 72)
-    print("The request is multiply(2.5, 4.0).")
+    print("Request: multiply(2.5, 4.0)")
     print("No float capability exists, so the framework will:")
-    print("  1. replicate IntegerMultiplication")
-    print("  2. ask Ollama to specialize the child")
-    print("  3. validate the generated code")
-    print("  4. activate FloatMultiplication as State S1")
+    print("  1. detect the unsupported [float, float] contract")
+    print("  2. replicate IntegerMultiplication")
+    print("  3. ask Ollama to specialize the child")
+    print("  4. verify the generated code")
+    print("  5. integrate and activate FloatMultiplication as State S1")
 
-    cases = [(2.5, 4.0, 10.0), (0.5, 0.2, 0.1), (-2.5, 4.0, -10.0), (3.14, 2.0, 6.28)]
+    cases = [
+        (2.5, 4.0, 10.0),
+        (0.5, 0.2, 0.1),
+        (-2.5, 4.0, -10.0),
+        (3.14, 2.0, 6.28),
+    ]
     value, specialized = dispatcher.execute(
-        "IntegerMultiplication", 2.5, 4.0,
+        "multiply", 2.5, 4.0,
         ("FloatMultiplication", "float", cases),
     )
 
@@ -65,16 +80,28 @@ def main():
     print("Result state:", specialized.state)
     print("2.5 * 4.0 =", value)
     print_lineage(registry, specialized.id)
-
-    print("\n[EVENTS]")
-    for event in specialized.events:
-        print(f"  {event.event}: {event.detail}")
+    print_events(specialized)
 
     if specialized.state != "S1":
-        print("\nSPECIALIZATION FAILED — check the Ollama service/model configuration.")
+        print("\nSPECIALIZATION FAILED")
+        print("Generated/failed capability source:")
+        print(specialized.source_code)
         return 1
 
-    print("\nSUCCESS: State 0 reproduced and specialized into State 1.")
+    print("\n" + "=" * 72)
+    print("USER INPUT — FLOAT AGAIN (INTEGRATED S1)")
+    print("=" * 72)
+    print("Request: multiply(3.0, 5.0)")
+    value2, reused = dispatcher.execute(
+        "multiply", 3.0, 5.0,
+        ("FloatMultiplication", "float", cases),
+    )
+    print("Resolved capability:", reused.name)
+    print("State:", reused.state)
+    print("Result:", value2)
+    print("The integrated S1 capability is reused; Ollama is not called again.")
+
+    print("\nSUCCESS: State 0 reproduced, specialized into State 1, integrated, and reused.")
     return 0
 
 
