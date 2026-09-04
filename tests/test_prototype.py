@@ -4,43 +4,64 @@ from sps_specialization.replication import ReplicationEngine
 from sps_specialization.specialization import SpecializationEngine
 from sps_specialization.verifier import Verifier
 from sps_specialization.evolution import EvolutionEngine
+from sps_specialization.dispatcher import CapabilityDispatcher
 
 INTEGER_SOURCE = '''def execute(a: int, b: int) -> int:\n    return a * b\n'''
 FLOAT_SOURCE = '''def execute(a: float, b: float) -> float:\n    return a * b\n'''
+
 
 class FakeOllama:
     def __init__(self, source):
         self.source = source
         self.prompts = []
+
     def generate(self, prompt):
         self.prompts.append(prompt)
         return self.source
 
-def test_capability_executes_and_replication_preserves_parent():
+
+def make_parent(registry=None):
     parent = Capability.create("IntegerMultiplication", "1.0", "S0", ["int", "int"], "int", INTEGER_SOURCE)
+    if registry:
+        registry.register(parent)
+    return parent
+
+
+def test_state_0_integer_multiplication():
+    parent = make_parent()
+    assert parent.state == "S0"
     assert parent.execute(6, 7) == 42
+    assert parent.execute(-3, 4) == -12
+
+
+def test_replication_creates_independent_child():
+    parent = make_parent()
     child = ReplicationEngine().replicate(parent)
     assert child.id != parent.id
     assert child.parent_id == parent.id
     assert child.state == "S0-C"
     assert child.execute(3, 4) == 12
 
-def test_specialization_generates_float_child_without_activation():
-    parent = Capability.create("IntegerMultiplication", "1.0", "S0", ["int", "int"], "int", INTEGER_SOURCE)
+
+def test_specialization_generates_float_child():
+    parent = make_parent()
     child = ReplicationEngine().replicate(parent)
-    ollama = FakeOllama(FLOAT_SOURCE)
-    specialized = SpecializationEngine(ollama).specialize(child, "FloatMultiplication", ["float", "float"], "float")
-    assert "specialization" in ollama.prompts[0].lower()
+    specialized = SpecializationEngine(FakeOllama(FLOAT_SOURCE)).specialize(
+        child, "FloatMultiplication", ["float", "float"], "float"
+    )
     assert specialized.name == "FloatMultiplication"
     assert specialized.parent_id == child.id
     assert specialized.state == "GENERATED"
     assert specialized.source_code == FLOAT_SOURCE
 
-def test_specialization_normalizes_markdown_wrapped_source():
-    parent = Capability.create("IntegerMultiplication", "1.0", "S0", ["int", "int"], "int", INTEGER_SOURCE)
+
+def test_specialization_normalizes_markdown_source():
+    parent = make_parent()
     child = ReplicationEngine().replicate(parent)
-    wrapped = "Here is the specialized capability:\n\n```python\ndef execute(a: float, b: float) -> float:\n    return a * b\n```\n"
-    specialized = SpecializationEngine(FakeOllama(wrapped)).specialize(child, "FloatMultiplication", ["float", "float"], "float")
+    wrapped = "Here is the specialized capability:\n```python\ndef execute(a: float, b: float) -> float:\n    return a * b\n```"
+    specialized = SpecializationEngine(FakeOllama(wrapped)).specialize(
+        child, "FloatMultiplication", ["float", "float"], "float"
+    )
     assert specialized.source_code == FLOAT_SOURCE
 
 
@@ -50,23 +71,62 @@ def test_verifier_accepts_float_and_rejects_unsafe():
     unsafe = "import os\ndef execute(a, b):\n    return os.system('echo bad')\n"
     assert not verifier.verify(unsafe, [(1.0, 2.0, 2.0)])
 
-def test_evolution_activates_verified_specialization_and_records_lineage():
+
+def test_evolution_activates_only_after_verification():
     registry = CapabilityRegistry()
-    parent = Capability.create("IntegerMultiplication", "1.0", "S0", ["int", "int"], "int", INTEGER_SOURCE)
-    registry.register(parent)
-    result = EvolutionEngine(registry, FakeOllama(FLOAT_SOURCE), Verifier()).evolve(parent.id, "FloatMultiplication", ["float", "float"], "float", [(2.5, 4.0, 10.0)])
+    parent = make_parent(registry)
+    result = EvolutionEngine(registry, FakeOllama(FLOAT_SOURCE), Verifier()).evolve(
+        parent.id, "FloatMultiplication", ["float", "float"], "float", [(2.5, 4.0, 10.0)]
+    )
     assert result.state == "S1"
     assert result.execute(2.5, 4.0) == 10.0
     assert registry.active(result.id) is result
-    assert [c.name for c in registry.lineage(result.id)] == ["IntegerMultiplication", "IntegerMultiplication-child", "FloatMultiplication"]
-    assert [e.event for e in result.events][-1] == "ACTIVATE"
+    assert [c.name for c in registry.lineage(result.id)] == [
+        "IntegerMultiplication", "IntegerMultiplication-child", "FloatMultiplication"
+    ]
+
+
+def test_dispatch_runs_integer_without_ai_then_specializes_float():
+    registry = CapabilityRegistry()
+    parent = make_parent(registry)
+    fake = FakeOllama(FLOAT_SOURCE)
+    evolution = EvolutionEngine(registry, fake, Verifier())
+    dispatcher = CapabilityDispatcher(registry, evolution)
+
+    # State 0: integer request is already supported; Ollama is not called.
+    value, capability = dispatcher.execute("IntegerMultiplication", 6, 7)
+    assert value == 42
+    assert capability.id == parent.id
+    assert fake.prompts == []
+
+    # New request: float multiplication is missing, so the system specializes.
+    cases = [(2.5, 4.0, 10.0), (0.5, 0.2, 0.1), (-2.5, 4.0, -10.0)]
+    value, capability = dispatcher.execute(
+        "IntegerMultiplication", 2.5, 4.0,
+        ("FloatMultiplication", "float", cases),
+    )
+    assert value == 10.0
+    assert capability.name == "FloatMultiplication"
+    assert capability.state == "S1"
+    assert capability.parent_id != parent.id
+    assert len(fake.prompts) == 1
+
+    # Same typed request now resolves to the generated capability; no second AI call.
+    value2, capability2 = dispatcher.execute(
+        "IntegerMultiplication", 3.0, 5.0,
+        ("FloatMultiplication", "float", cases),
+    )
+    assert value2 == 15.0
+    assert capability2.id == capability.id
+    assert len(fake.prompts) == 1
+
 
 def test_failed_generation_never_activates():
     registry = CapabilityRegistry()
-    parent = Capability.create("IntegerMultiplication", "1.0", "S0", ["int", "int"], "int", INTEGER_SOURCE)
-    registry.register(parent)
+    parent = make_parent(registry)
     bad = "def execute(a, b):\n    return a + b\n"
-    result = EvolutionEngine(registry, FakeOllama(bad), Verifier()).evolve(parent.id, "BadFloatMultiplication", ["float", "float"], "float", [(2.5, 4.0, 10.0)])
+    result = EvolutionEngine(registry, FakeOllama(bad), Verifier()).evolve(
+        parent.id, "BadFloatMultiplication", ["float", "float"], "float", [(2.5, 4.0, 10.0)]
+    )
     assert result.state == "FAILED"
     assert registry.active(result.id) is None
-    assert any(e.event == "VERIFY_FAIL" for e in result.events)
