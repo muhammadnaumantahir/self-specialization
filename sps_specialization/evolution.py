@@ -12,11 +12,26 @@ class EvolutionEngine:
         parent = self.registry.get(parent_id)
         child = ReplicationEngine().replicate(parent)
         self.registry.register(child)
+
         try:
             generated = SpecializationEngine(self.ollama).specialize(
                 child, target_name, input_types, output_type
             )
-            verified, reason = self.verifier.verify_detailed(generated.source_code, cases)
+        except Exception as exc:
+            # Keep the replicated child in the registry and preserve the exact
+            # specialization failure. This makes S0-C observable instead of
+            # collapsing a generation failure into a bare FAILED state.
+            child.state = "FAILED"
+            child.record(
+                "FAILED",
+                f"SPECIALIZATION_ERROR: {type(exc).__name__}: {exc}",
+            )
+            return child
+
+        try:
+            verified, reason = self.verifier.verify_detailed(
+                generated.source_code, cases
+            )
             if verified:
                 generated.state = "S1"
                 generated.activated_at = generated.created_at
@@ -29,9 +44,13 @@ class EvolutionEngine:
                 self.registry.register(generated)
             return generated
         except Exception as exc:
-            child.state = "FAILED"
-            child.record("FAILED", f"{type(exc).__name__}: {exc}")
-            return child
+            generated.state = "FAILED"
+            generated.record(
+                "FAILED",
+                f"VERIFICATION_ERROR: {type(exc).__name__}: {exc}",
+            )
+            self.registry.register(generated)
+            return generated
 
     def specialize_request(self, parent_id, target_name, input_types, output_type, cases):
         """Specialize a capability only when the requested typed capability is absent."""
