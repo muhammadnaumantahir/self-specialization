@@ -41,7 +41,7 @@ def make_hierarchy(registry):
         "SerializeCapability", "1.0", "S0", ["Any", "Any"], "Any", SERIALIZE_SOURCE
     )
     integer = Capability.create(
-        "IntegerMultiplication", "1.0", "S1", ["int", "int"], "int", INTEGER_SOURCE,
+        "IntegerMultiplication", "1.0", "S0", ["int", "int"], "int", INTEGER_SOURCE,
         parent_id=general.id,
     )
     registry.register(general)
@@ -130,6 +130,7 @@ def test_evolution_activates_only_after_verification():
     assert [c.name for c in registry.children(general.id)] == [
         "IntegerMultiplication", "FloatMultiplication"
     ]
+    assert integer.state == "S0"
     assert not any(c.name.endswith("-copy") for c in registry.all())
     assert any(e.event == "VERIFY_PASS" and e.detail == "PASS" for e in result.events)
 
@@ -178,6 +179,7 @@ def test_multiply_request_uses_integer_state_without_ai_then_specializes_float()
     value, capability = dispatcher.execute("multiply", 6, 7)
     assert value == 42
     assert capability.id == integer.id
+    assert capability.state == "S0"
     assert fake.prompts == []
 
     cases = [(2.5, 4.0, 10.0), (0.5, 0.2, 0.1), (-2.5, 4.0, -10.0)]
@@ -188,6 +190,7 @@ def test_multiply_request_uses_integer_state_without_ai_then_specializes_float()
     assert capability.name == "FloatMultiplication"
     assert capability.state == "S1"
     assert capability.parent_id == general.id
+    assert integer.state == "S0"
     assert len(fake.prompts) == 1
 
     value2, capability2 = dispatcher.execute(
@@ -209,6 +212,7 @@ def test_missing_float_request_dynamically_creates_serialize_parent_and_reparent
 
     assert [cap.name for cap in registry.all()] == ["IntegerMultiplication"]
     assert integer.parent_id is None
+    assert integer.state == "S0"
 
     value, floating = dispatcher.execute(
         "multiply", 2.5, 4.0,
@@ -222,6 +226,7 @@ def test_missing_float_request_dynamically_creates_serialize_parent_and_reparent
     assert general.name == "SerializeCapability"
     assert general.state == "S0"
     assert integer.parent_id == general.id
+    assert integer.state == "S0"
     assert registry.get(integer.id) is integer
     assert [cap.name for cap in registry.children(general.id)] == [
         "IntegerMultiplication", "FloatMultiplication"
@@ -333,6 +338,7 @@ def test_general_serialize_capability_is_root_of_specialized_children():
     registry.register(floating)
 
     assert general.state == "S0"
+    assert integer.state == "S0"
     assert integer.parent_id == general.id
     assert floating.parent_id == general.id
     assert [cap.name for cap in registry.children(general.id)] == [
@@ -356,6 +362,7 @@ def test_specialized_capabilities_are_siblings_not_nested_replication_children()
 
     assert result.state == "S1"
     assert result.parent_id == general.id
+    assert integer.state == "S0"
     assert [cap.name for cap in registry.children(general.id)] == [
         "IntegerMultiplication", "FloatMultiplication"
     ]
