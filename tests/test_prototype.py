@@ -198,6 +198,42 @@ def test_multiply_request_uses_integer_state_without_ai_then_specializes_float()
     assert len(fake.prompts) == 1
 
 
+def test_missing_float_request_dynamically_creates_serialize_parent_and_reparents_existing_integer():
+    registry = CapabilityRegistry()
+    integer = make_parent(registry)
+    fake = FakeOllama(FLOAT_SOURCE)
+    dispatcher = CapabilityDispatcher(
+        registry,
+        EvolutionEngine(registry, fake, Verifier()),
+    )
+
+    assert [cap.name for cap in registry.all()] == ["IntegerMultiplication"]
+    assert integer.parent_id is None
+
+    value, floating = dispatcher.execute(
+        "multiply", 2.5, 4.0,
+        ("FloatMultiplication", "float", [(2.5, 4.0, 10.0)]),
+    )
+
+    assert value == 10.0
+    assert floating.state == "S1"
+    assert floating.parent_id is not None
+    general = registry.get(floating.parent_id)
+    assert general.name == "SerializeCapability"
+    assert general.state == "S0"
+    assert integer.parent_id == general.id
+    assert registry.get(integer.id) is integer
+    assert [cap.name for cap in registry.children(general.id)] == [
+        "IntegerMultiplication", "FloatMultiplication"
+    ]
+    assert [cap.name for cap in registry.lineage(floating.id)] == [
+        "SerializeCapability", "FloatMultiplication"
+    ]
+    assert not any(cap.name.endswith("-copy") for cap in registry.all())
+    assert any(event.event == "SERIALIZE" for event in general.events)
+    assert any(event.event == "REPARENT" for event in integer.events)
+
+
 def test_registry_persists_capability_metadata_and_python_source(tmp_path):
     registry = CapabilityRegistry(storage_dir=tmp_path / "capabilities")
     parent = make_parent(registry)
