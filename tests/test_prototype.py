@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from sps_specialization.capability import Capability
+from sps_specialization.handler import CapabilityHandler
 from sps_specialization.registry import CapabilityRegistry
 from sps_specialization.replication import ReplicationEngine
 from sps_specialization.specialization import SpecializationEngine
@@ -10,6 +11,7 @@ from sps_specialization.dispatcher import CapabilityDispatcher
 
 INTEGER_SOURCE = '''def execute(a: int, b: int) -> int:\n    return a * b\n'''
 FLOAT_SOURCE = '''def execute(a: float, b: float) -> float:\n    return a * b\n'''
+SERIALIZE_SOURCE = '''def execute(a, b):\n    raise NotImplementedError("SerializeCapability is a general capability")\n'''
 
 
 class FakeOllama:
@@ -249,3 +251,71 @@ def test_evolution_persists_generated_state_1_artifact(tmp_path):
     assert Path(inspected["storage"]["record"]).exists()
     assert Path(inspected["storage"]["source"]).read_text() == FLOAT_SOURCE
     assert registry.get("FloatMultiplication").execute(2.5, 4.0) == 10.0
+
+
+def test_capability_handler_owns_execution_and_resources():
+    capability = Capability.create(
+        "IntegerMultiplication", "1.0", "S1", ["int", "int"], "int", INTEGER_SOURCE
+    )
+    assert isinstance(capability.handler, CapabilityHandler)
+    assert capability.handler.capability_id == capability.id
+    assert capability.handler.status == "ready"
+    assert "source_code" in capability.handler.resources
+    assert capability.handler.execute(6, 7) == 42
+    assert capability.inspect_handler()["capability_id"] == capability.id
+
+
+def test_general_serialize_capability_is_root_of_specialized_children():
+    registry = CapabilityRegistry()
+    general = Capability.create(
+        "SerializeCapability", "1.0", "S0", ["Any", "Any"], "Any", SERIALIZE_SOURCE
+    )
+    integer = Capability.create(
+        "IntegerMultiplication", "1.0", "S1", ["int", "int"], "int", INTEGER_SOURCE,
+        parent_id=general.id,
+    )
+    floating = Capability.create(
+        "FloatMultiplication", "1.0", "S1", ["float", "float"], "float", FLOAT_SOURCE,
+        parent_id=general.id,
+    )
+    registry.register(general)
+    registry.register(integer)
+    registry.register(floating)
+
+    assert integer.parent_id == general.id
+    assert floating.parent_id == general.id
+    assert [cap.name for cap in registry.children(general.id)] == [
+        "IntegerMultiplication", "FloatMultiplication"
+    ]
+    assert [cap.name for cap in registry.lineage(floating.id)] == [
+        "SerializeCapability", "FloatMultiplication"
+    ]
+    assert [cap.name for cap in registry.lineage(integer.id)] == [
+        "SerializeCapability", "IntegerMultiplication"
+    ]
+
+
+def test_specialized_capabilities_are_siblings_not_nested_replication_children():
+    registry = CapabilityRegistry()
+    general = Capability.create(
+        "SerializeCapability", "1.0", "S0", ["Any", "Any"], "Any", SERIALIZE_SOURCE
+    )
+    integer = Capability.create(
+        "IntegerMultiplication", "1.0", "S1", ["int", "int"], "int", INTEGER_SOURCE,
+        parent_id=general.id,
+    )
+    registry.register(general)
+    registry.register(integer)
+    result = EvolutionEngine(registry, FakeOllama(FLOAT_SOURCE), Verifier()).evolve(
+        general.id, "FloatMultiplication", ["float", "float"], "float", [(2.5, 4.0, 10.0)]
+    )
+
+    assert result.state == "S1"
+    assert result.parent_id == general.id
+    assert [cap.name for cap in registry.children(general.id)] == [
+        "IntegerMultiplication", "FloatMultiplication"
+    ]
+    assert not any(cap.name == "IntegerMultiplication-child" for cap in registry.all())
+    assert [cap.name for cap in registry.lineage(result.id)] == [
+        "SerializeCapability", "FloatMultiplication"
+    ]
