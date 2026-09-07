@@ -27,8 +27,8 @@ def test_rules_allow_integer_to_float_multiplication_type_specialization():
 
     assert rule is not None
     assert rule.operation == "multiply"
-    assert rule.source_types == ["int", "int"]
-    assert rule.target_types == ["float", "float"]
+    assert rule.source_types == ("int", "int")
+    assert rule.target_types == ("float", "float")
     assert rule.target_output_type == "float"
 
 
