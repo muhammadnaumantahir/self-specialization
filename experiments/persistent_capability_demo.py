@@ -1,8 +1,7 @@
-"""Run the self-specialization prototype against application-owned storage.
+"""Run the deterministic self-specialization prototype against application storage.
 
-Unlike the original throwaway demo, this script does not delete the capability
-registry between runs. Generated capabilities therefore survive process restarts.
-Set SPS_DEMO_RESET=1 when a clean research run is explicitly required.
+The demo contains no AI model or network dependency. Stage 1 specialization is
+controlled by the explicit type-specialization rules module.
 """
 
 import os
@@ -17,7 +16,6 @@ from sps_specialization import (
     CapabilityDispatcher,
     CapabilityRegistry,
     EvolutionEngine,
-    OllamaClient,
     Verifier,
 )
 
@@ -47,7 +45,7 @@ def main():
     for capability in registry.all():
         print(f"  - {capability.name} [{capability.state}]")
 
-    engine = EvolutionEngine(registry, OllamaClient(), Verifier())
+    engine = EvolutionEngine(registry, Verifier())
     dispatcher = CapabilityDispatcher(registry, engine)
 
     value, capability = dispatcher.execute(
@@ -61,10 +59,10 @@ def main():
 
     print(f"Result: {capability.name} [{capability.state}] -> {value}")
     print("Hierarchy:")
-    for capability in registry.all():
+    for item in registry.all():
         print(
-            f"  {capability.name} [{capability.state}] "
-            f"parent={capability.parent_id}"
+            f"  {item.name} [{item.state}] "
+            f"parent={item.parent_id}"
         )
 
     reloaded = CapabilityRegistry.persistent()
@@ -73,7 +71,7 @@ def main():
         f"Reload verification: {persisted.name} [{persisted.state}] "
         f"-> {persisted.execute(3.0, 5.0)}"
     )
-    print("No new AI generation is required after reload.")
+    print("No AI/model invocation is required for specialization or reuse.")
     return 0
 
 
