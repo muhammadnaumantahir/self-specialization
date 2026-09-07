@@ -14,21 +14,6 @@ FLOAT_SOURCE = '''def execute(a: float, b: float) -> float:\n    return a * b\n'
 SERIALIZE_SOURCE = '''def execute(a, b):\n    raise NotImplementedError("SerializeCapability is a general capability")\n'''
 
 
-class FakeOllama:
-    def __init__(self, source):
-        self.source = source
-        self.prompts = []
-
-    def generate(self, prompt):
-        self.prompts.append(prompt)
-        return self.source
-
-
-class FailingOllama:
-    def generate(self, prompt):
-        raise ConnectionError("Ollama server unavailable")
-
-
 def make_parent(registry=None):
     parent = Capability.create("IntegerMultiplication", "1.0", "S0", ["int", "int"], "int", INTEGER_SOURCE)
     if registry:
@@ -65,26 +50,29 @@ def test_replication_creates_independent_child():
     assert child.execute(3, 4) == 12
 
 
-def test_specialization_generates_float_child():
+def test_specialization_generates_float_child_without_ai():
     parent = make_parent()
     child = ReplicationEngine().replicate(parent)
-    specialized = SpecializationEngine(FakeOllama(FLOAT_SOURCE)).specialize(
+    specialized = SpecializationEngine().specialize(
         child, "FloatMultiplication", ["float", "float"], "float"
     )
     assert specialized.name == "FloatMultiplication"
     assert specialized.parent_id == child.id
     assert specialized.state == "GENERATED"
+    assert specialized.execute(2.5, 4.0) == 10.0
     assert specialized.source_code == FLOAT_SOURCE
 
 
-def test_specialization_normalizes_markdown_source():
+def test_specialization_rejects_semantic_growth_outside_stage_1_rules():
     parent = make_parent()
     child = ReplicationEngine().replicate(parent)
-    wrapped = "Here is the specialized capability:\n```python\ndef execute(a: float, b: float) -> float:\n    return a * b\n```"
-    specialized = SpecializationEngine(FakeOllama(wrapped)).specialize(
-        child, "FloatMultiplication", ["float", "float"], "float"
-    )
-    assert specialized.source_code == FLOAT_SOURCE
+    try:
+        SpecializationEngine().specialize(
+            child, "IntegerAddition", ["int", "int"], "int"
+        )
+        assert False, "semantic operation changes must be rejected"
+    except ValueError as exc:
+        assert "outside type specialization rules" in str(exc)
 
 
 def test_verifier_accepts_float_and_rejects_unsafe():
@@ -117,7 +105,7 @@ def test_verifier_reports_syntax_error():
 def test_evolution_activates_only_after_verification():
     registry = CapabilityRegistry()
     general, integer = make_hierarchy(registry)
-    result = EvolutionEngine(registry, FakeOllama(FLOAT_SOURCE), Verifier()).evolve(
+    result = EvolutionEngine(registry, Verifier()).evolve(
         general.id, "FloatMultiplication", ["float", "float"], "float",
         [(2.5, 4.0, 10.0)], source_capability_id=integer.id
     )
@@ -135,52 +123,29 @@ def test_evolution_activates_only_after_verification():
     assert any(e.event == "VERIFY_PASS" and e.detail == "PASS" for e in result.events)
 
 
-def test_failed_generation_never_activates_and_records_reason():
+def test_failed_generation_never_activates_when_rule_rejects_it():
     registry = CapabilityRegistry()
     general, integer = make_hierarchy(registry)
-    bad = "def execute(a, b):\n    return a + b\n"
-    result = EvolutionEngine(registry, FakeOllama(bad), Verifier()).evolve(
-        general.id, "BadFloatMultiplication", ["float", "float"], "float",
-        [(2.5, 4.0, 10.0)], source_capability_id=integer.id
+    result = EvolutionEngine(registry, Verifier()).evolve(
+        general.id, "IntegerAddition", ["int", "int"], "int",
+        [(2, 5, 7)], source_capability_id=integer.id
     )
     assert result.state == "FAILED"
     assert registry.active(result.id) is None
-    failures = [e.detail for e in result.events if e.event == "VERIFY_FAIL"]
-    assert failures and "WRONG_RESULT" in failures[-1]
+    failures = [e.detail for e in result.events if e.event == "FAILED"]
+    assert failures and "outside type specialization rules" in failures[-1]
 
 
-def test_ollama_failure_is_preserved_and_dispatcher_surfaces_reason():
-    registry = CapabilityRegistry()
-    make_hierarchy(registry)
-    dispatcher = CapabilityDispatcher(
-        registry,
-        EvolutionEngine(registry, FailingOllama(), Verifier()),
-    )
-    try:
-        dispatcher.execute(
-            "multiply", 2.5, 4.0,
-            ("FloatMultiplication", "float", [(2.5, 4.0, 10.0)]),
-        )
-        assert False, "dispatcher should raise for failed specialization"
-    except RuntimeError as exc:
-        message = str(exc)
-        assert "state=FAILED" in message
-        assert "ConnectionError" in message
-        assert "Ollama server unavailable" in message
-
-
-def test_multiply_request_uses_integer_state_without_ai_then_specializes_float():
+def test_multiply_request_uses_integer_state_then_specializes_float():
     registry = CapabilityRegistry()
     general, integer = make_hierarchy(registry)
-    fake = FakeOllama(FLOAT_SOURCE)
-    evolution = EvolutionEngine(registry, fake, Verifier())
+    evolution = EvolutionEngine(registry, Verifier())
     dispatcher = CapabilityDispatcher(registry, evolution)
 
     value, capability = dispatcher.execute("multiply", 6, 7)
     assert value == 42
     assert capability.id == integer.id
     assert capability.state == "S0"
-    assert fake.prompts == []
 
     cases = [(2.5, 4.0, 10.0), (0.5, 0.2, 0.1), (-2.5, 4.0, -10.0)]
     value, capability = dispatcher.execute(
@@ -191,23 +156,20 @@ def test_multiply_request_uses_integer_state_without_ai_then_specializes_float()
     assert capability.state == "S1"
     assert capability.parent_id == general.id
     assert integer.state == "S0"
-    assert len(fake.prompts) == 1
 
     value2, capability2 = dispatcher.execute(
         "multiply", 3.0, 5.0, ("FloatMultiplication", "float", cases)
     )
     assert value2 == 15.0
     assert capability2.id == capability.id
-    assert len(fake.prompts) == 1
 
 
 def test_missing_float_request_dynamically_creates_serialize_parent_and_reparents_existing_integer():
     registry = CapabilityRegistry()
     integer = make_parent(registry)
-    fake = FakeOllama(FLOAT_SOURCE)
     dispatcher = CapabilityDispatcher(
         registry,
-        EvolutionEngine(registry, fake, Verifier()),
+        EvolutionEngine(registry, Verifier()),
     )
 
     assert [cap.name for cap in registry.all()] == ["IntegerMultiplication"]
@@ -303,7 +265,7 @@ def test_evolution_persists_generated_state_1_artifact(tmp_path):
     storage_dir = tmp_path / "capabilities"
     registry = CapabilityRegistry(storage_dir=storage_dir)
     general, integer = make_hierarchy(registry)
-    result = EvolutionEngine(registry, FakeOllama(FLOAT_SOURCE), Verifier()).evolve(
+    result = EvolutionEngine(registry, Verifier()).evolve(
         general.id, "FloatMultiplication", ["float", "float"], "float",
         [(2.5, 4.0, 10.0)], source_capability_id=integer.id
     )
@@ -355,7 +317,7 @@ def test_general_serialize_capability_is_root_of_specialized_children():
 def test_specialized_capabilities_are_siblings_not_nested_replication_children():
     registry = CapabilityRegistry()
     general, integer = make_hierarchy(registry)
-    result = EvolutionEngine(registry, FakeOllama(FLOAT_SOURCE), Verifier()).evolve(
+    result = EvolutionEngine(registry, Verifier()).evolve(
         general.id, "FloatMultiplication", ["float", "float"], "float",
         [(2.5, 4.0, 10.0)], source_capability_id=integer.id
     )
