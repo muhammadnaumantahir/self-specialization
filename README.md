@@ -1,471 +1,223 @@
 # SPS Self-Specialization Prototype
 
-A minimal research prototype demonstrating two capabilities from the self-programming research problem:
+A small research prototype for **bounded capability growth**.
 
-1. An existing capability can generate a copy of itself.
-2. The generated copy can be transformed into a bounded specialized capability.
+Stage 1 demonstrates:
 
-The prototype intentionally focuses on the small State 0 → State 1 experiment and does **not** attempt to implement the full SPS ten-layer architecture.
+```text
+IntegerMultiplication [S0]
+        |
+        v
+replicate -> S0-C
+        |
+        v
+Type Specialization Rules
+        |
+        v
+FloatMultiplication [GENERATED]
+        |
+        v
+verify -> S1
+```
 
-## Stage 1: bounded type specialization
+## Core rule
 
-This implementation deliberately removes the AI/model dependency from specialization.
+Stage 1 is **deterministic**. No AI, Ollama, Qwen, API key or model server is required.
 
-The rule boundary is a separate file:
+The allowed transformations are defined in one separate policy file:
 
 ```text
 sps_specialization/type_specialization_rules.py
 ```
 
-Only transformations explicitly declared there are allowed. The transformer does **not** invent a new operation.
-
-For the current multiplication family:
+The transformer can only apply an explicitly declared rule and the operation must remain unchanged.
 
 ```text
-IntegerMultiplication [S0]
-   ├── FloatMultiplication  ✓
-   ├── LongMultiplication   ✓
-   ├── DoubleMultiplication ✓
-   └── IntegerAddition      ✗
+IntegerMultiplication -> FloatMultiplication   ✓
+IntegerMultiplication -> LongMultiplication    ✓
+IntegerMultiplication -> DoubleMultiplication  ✓
+IntegerMultiplication -> IntegerAddition       ✗
 ```
 
-Therefore:
+Thus `multiply -> add` is not silently treated as specialization. It belongs to a future semantic-growth stage.
 
-```text
-IntegerMultiplication → FloatMultiplication   = type specialization
-IntegerMultiplication → LongMultiplication    = type specialization
-IntegerMultiplication → DoubleMultiplication  = type specialization
-IntegerMultiplication → IntegerAddition       = rejected
-```
+## Runtime flow
 
-Semantic growth such as `multiply → add` is intentionally reserved for a later stage and is not part of Stage 1.
+1. `IntegerMultiplication [S0]` is the initial programmer-defined capability.
+2. `multiply(6, 7)` executes the existing S0 capability.
+3. A request such as `multiply(2.5, 4.0)` is detected as a missing typed capability.
+4. The system creates `SerializeCapability [S0]` when needed and reparents the existing integer capability without changing its ID or state.
+5. A transient `S0-C` copy is created.
+6. The type-specialization rule table is checked.
+7. Only type annotations are transformed; the multiplication operation is preserved.
+8. The candidate is verified.
+9. A verified specialization becomes `S1` and is registered as a sibling of the S0 capability.
+10. Later requests reuse the registered S1 capability.
 
-## Core research lifecycle
-
-The important distinction is that `SerializeCapability` is **not present initially**.
-
-```text
-INITIAL
-IntegerMultiplication [S0]
-        │
-        │ Float request arrives
-        ▼
-FloatMultiplication missing
-        │
-        ▼
-Serialize / Generalize IntegerMultiplication [S0]
-        │
-        ▼
-SerializeCapability [S0]  ← CREATED NOW
-        │
-        ├── IntegerMultiplication [S0]  ← SAME ID, reparented
-        │
-        ▼
-Replicate IntegerMultiplication
-        │
-        ▼
-Transient IntegerMultiplication-copy [S0-C]
-        │
-        ▼
-Deterministic TypeSpecializationTransformer
-        │
-        │ consults explicit type_specialization_rules.py
-        ▼
-FloatMultiplication [GENERATED]
-        │
-        ▼
-Verification
-        │
-        ▼
-FloatMultiplication [S1]
-        │
-        ▼
-Attach under SerializeCapability
-```
-
-## Before the float request
-
-The persistent registry contains the programmer-defined capability:
-
-```text
-IntegerMultiplication [S0]
-```
-
-There is:
-
-- no `SerializeCapability`
-- no `FloatMultiplication`
-- no permanent replication copy
-
-The integer implementation is:
-
-```python
-def execute(a: int, b: int) -> int:
-    return a * b
-```
-
-It can immediately execute:
-
-```text
-multiply(6, 7) → 42
-```
-
-## After the float request
-
-When the request
-
-```text
-multiply(2.5, 4.0)
-```
-
-arrives, the dispatcher detects that `[float, float] -> float` is missing.
-
-The existing `IntegerMultiplication [S0]` capability is selected as the source. The system then creates the generalization boundary dynamically:
+Final hierarchy:
 
 ```text
 SerializeCapability [S0]
+├── IntegerMultiplication [S0]
+└── FloatMultiplication [S1]
 ```
 
-The **existing integer capability is reparented**, preserving its original ID and State 0 status.
-
-A transient copy is then made for specialization. The deterministic transformer checks the source operation and the exact source/target type contract against the explicit rules. Only if a declared rule matches can the new capability be created.
-
-Final persistent hierarchy:
+## Repository structure
 
 ```text
-              SerializeCapability [S0]
-                        │
-               ┌────────┴────────┐
-               ▼                 ▼
- IntegerMultiplication    FloatMultiplication
-        [S0]                    [S1]
+sps_specialization/
+├── capability.py                  # capability model and execution
+├── handler.py                     # runtime execution/resource owner
+├── registry.py                    # lookup, lineage and persistence
+├── replication.py                 # transient S0-C copy
+├── specialization.py              # specialization facade
+├── type_specialization.py          # deterministic transformer
+├── type_specialization_rules.py    # Stage 1 growth boundary
+├── evolution.py                    # evolution lifecycle
+├── dispatcher.py                   # typed request routing
+└── verifier.py                     # verification before activation
+
+experiments/
+└── self_specialization_demo.py     # main end-to-end demonstration
+
+colab/
+└── SPS_Self_Specialization_Test.ipynb
+
+tests/
+├── test_prototype.py
+├── test_registry_persistent_location.py
+└── test_type_specialization_rules.py
+
+docs/superpowers/specs/
+├── 2026-09-04-capability-registry.md
+└── 2026-09-04-self-specialization-design.md
 ```
 
-The transient `S0-C` copy is an evolution mechanism and is **not** a final hierarchy node.
+## Install and test locally
 
-## Why IntegerMultiplication remains S0
+```bash
+git clone https://github.com/muhammadnaumantahir/self-specialization.git
+cd self-specialization
 
-State labels describe the capability's evolutionary state, not its depth in the hierarchy.
+python -m venv .venv
+```
 
-| State | Meaning |
-|---|---|
-| `S0` | Original/general capability state supplied or established without specialization |
-| `S0-C` | Transient replicated copy used as the specialization substrate |
-| `GENERATED` | Generated source exists but is not yet activated |
-| `S1` | Verified, activated specialized capability |
-| `FAILED` | Specialization or verification failed |
+Windows:
 
-Therefore:
+```bash
+.venv\Scripts\activate
+```
+
+macOS/Linux:
+
+```bash
+source .venv/bin/activate
+```
+
+Install dependencies:
+
+```bash
+python -m pip install -r requirements.txt
+```
+
+Run the complete test suite:
+
+```bash
+PYTHONPATH=. pytest -q
+```
+
+On Windows PowerShell, use:
+
+```powershell
+$env:PYTHONPATH = "."
+pytest -q
+```
+
+## Run the research demo
+
+For a clean first run:
+
+Windows PowerShell:
+
+```powershell
+$env:SPS_DEMO_RESET = "1"
+$env:PYTHONPATH = "."
+python experiments/self_specialization_demo.py
+```
+
+macOS/Linux:
+
+```bash
+SPS_DEMO_RESET=1 PYTHONPATH=. python experiments/self_specialization_demo.py
+```
+
+The demo should show:
 
 ```text
-IntegerMultiplication = S0
-SerializeCapability   = S0
-FloatMultiplication   = S1
+=== INITIAL S0 ===
+IntegerMultiplication [S0]: 6 * 7 = 42
+
+=== FLOAT REQUEST ===
+Request: multiply(2.5, 4.0)
+Result: FloatMultiplication [S1] = 10.0
+
+=== FINAL HIERARCHY ===
+SerializeCapability [S0]
+  ├── IntegerMultiplication [S0]
+  └── FloatMultiplication [S1]
+
+=== BOUNDARY ===
+Allowed: int multiplication -> float/long/double multiplication
+Rejected: multiplication -> addition
 ```
 
-Creating `SerializeCapability` does **not** promote `IntegerMultiplication` to S1. The original capability remains State 0; only the verified specialized result becomes State 1.
+## Test the growth boundary directly
 
-## Type specialization rules
+```bash
+PYTHONPATH=. pytest -q tests/test_type_specialization_rules.py
+```
 
-`type_specialization_rules.py` is the explicit growth boundary for Stage 1.
-
-A rule contains:
+The important test is the rejection of:
 
 ```text
-source operation
-source input types
-source output type
-target input types
-target output type
-runtime Python annotations
+IntegerMultiplication -> IntegerAddition
 ```
 
-The matching process is:
-
-```text
-Source capability
-       │
-       ▼
-Detect source operation
-       │
-       ▼
-Detect requested target operation
-       │
-       ├── different operation ──→ REJECT
-       │
-       ▼
-Exact source/target contract lookup
-       │
-       ├── no declared rule ─────→ REJECT
-       │
-       ▼
-Transform only the type annotations
-       │
-       ▼
-Preserve original multiplication body
-       │
-       ▼
-Generate candidate → Verify → S1
-```
-
-The implementation therefore has no path in the Stage 1 transformer from multiplication to addition. To add such a transformation later, a **different semantic-growth mechanism** must be designed explicitly rather than silently extending the type-specialization rules.
-
-## Future numeric specializations
-
-The rule table already establishes the extension mechanism for additional numeric forms:
-
-```text
-IntegerMultiplication [S0]
-       │
-       ├── FloatMultiplication  [S1]
-       ├── LongMultiplication   [S1]
-       └── DoubleMultiplication [S1]
-```
-
-`long` is represented as a logical integer-width target and `double` as a logical floating-point target while Python runtime annotations map them to supported Python primitives. The logical type remains part of the capability contract.
-
-Adding a new legal path is therefore a rule change, not a transformer rewrite.
-
-## Complete runtime sequence
-
-```text
-1. IntegerMultiplication [S0] exists
-2. User requests float multiplication
-3. Dispatcher detects FloatMultiplication is missing
-4. Existing IntegerMultiplication [S0] is selected as the source
-5. System creates SerializeCapability [S0] when the family needs a generalization boundary
-6. Existing IntegerMultiplication [S0] is reparented under it
-7. IntegerMultiplication is replicated into transient S0-C
-8. TypeSpecializationTransformer identifies the source operation
-9. Stage 1 rule table validates the exact type transformation
-10. Transformer changes the type annotations and preserves the multiplication body
-11. Generated source enters GENERATED state
-12. Verifier checks syntax, policy and functional cases
-13. Verified FloatMultiplication becomes S1
-14. FloatMultiplication is linked directly under SerializeCapability
-15. Generated metadata and source are persisted
-16. Later float requests reuse the persisted S1 capability
-```
-
-## Capability Handler
-
-Each capability owns a lightweight `CapabilityHandler` responsible for runtime concerns:
-
-```text
-Capability
-    │
-    └── CapabilityHandler
-          ├── capability identity
-          ├── executable function
-          ├── resources
-          │    ├── source code
-          │    ├── input contract
-          │    └── output contract
-          ├── runtime status
-          └── execution
-```
-
-The handler addresses the research question: when a generated capability exists, **where is its handling and what resources does it own?**
-
-It is intentionally lightweight and is not a production process supervisor or security sandbox.
-
-## Component responsibilities
-
-### `SerializeCapability`
-
-A general capability created **on demand** when a missing specialization requires a generalization boundary. It is not pre-installed.
-
-### `IntegerMultiplication`
-
-The programmer-defined State 0 source capability. It remains S0 throughout this experiment and supplies the implementation that can be replicated and specialized.
-
-### `CapabilityHandler`
-
-The runtime owner of execution and lightweight capability resources.
-
-### `CapabilityRegistry`
-
-Stores capability identity, contracts, parent/child relationships, events, source code and handler metadata. It supports lookup, inspection, lineage, persistence, reload and reparenting.
-
-### `ReplicationEngine`
-
-Creates the transient `S0-C` copy. This proves the copy-generation step without polluting the final capability hierarchy.
-
-### `TypeSpecializationTransformer`
-
-Performs the deterministic Stage 1 transformation using only the explicit rules from `type_specialization_rules.py`.
-
-### `SpecializationEngine`
-
-Facade for the Stage 1 deterministic specialization mechanism.
-
-### `Verifier`
-
-Checks candidate source before activation using syntax/AST restrictions and functional test cases.
-
-### `EvolutionEngine`
-
-Coordinates dynamic serialization/generalization, reparenting, replication, deterministic specialization, verification and activation.
-
-### `CapabilityDispatcher`
-
-Receives typed requests, chooses an existing capability when possible, and triggers evolution when the requested typed capability is missing.
-
-## Event trace
-
-The dynamic process is observable through events such as:
-
-```text
-SERIALIZE
-REPARENT
-REPLICATE
-SPECIALIZE
-TYPE_SPECIALIZE
-GENERATED
-VERIFY_PASS
-ACTIVATE
-CHILD_LINK
-```
-
-The events are persisted with capability metadata and exposed through registry inspection.
+That request must fail because there is no matching Stage 1 rule and the semantic operation changes from multiplication to addition.
 
 ## Persistence
 
-The capability registry is application-owned by default:
+Generated capabilities are stored under:
 
 ```text
 data/capability-registry/
 ├── registry.json
 ├── records/
-│   ├── <capability-id>.json
-│   └── ...
 └── sources/
-    ├── <capability-id>_IntegerMultiplication.py
-    ├── <capability-id>_FloatMultiplication.py
-    └── ...
 ```
 
-Set `SPS_CAPABILITY_REGISTRY_DIR` to override this location for CI or experiments.
+The location can be overridden with:
 
-The JSON record contains state, contracts, relationships, events and handler metadata. The Python file contains executable source.
-
-After reload, the S1 float capability can be reused without another transformation step, while the original integer capability remains S0.
-
-## Tests
-
-No model server, Ollama installation, API key or network service is required:
-
-```bash
-pip install -r requirements.txt
-PYTHONPATH=. pytest -q
+```text
+SPS_CAPABILITY_REGISTRY_DIR
 ```
 
-Coverage includes:
-
-- initial State 0 integer capability
-- transient S0-C replication
-- deterministic float specialization
-- explicit type rule matching
-- deterministic future numeric targets (`long`, `double`)
-- rejection of multiplication → addition
-- rejection of unsupported target types
-- verifier acceptance/rejection
-- verification diagnostics
-- dispatcher reuse vs specialization
-- dynamic creation of `SerializeCapability`
-- reparenting the existing `IntegerMultiplication` without changing its ID
-- preserving `IntegerMultiplication` as S0
-- final sibling hierarchy
-- handler execution/resources
-- persistence
-- reload and reuse
+The runtime data directory is ignored by Git so generated research artifacts remain local.
 
 ## Google Colab
 
-Use a fresh clone so the notebook always runs the current `main` branch:
+Open `colab/SPS_Self_Specialization_Test.ipynb` and run the cells in order. The notebook clones the current `main` branch, installs the requirements, runs the tests, runs the deterministic demo, and checks the rule boundary.
 
-```python
-%cd /content
-!rm -rf self-specialization
-!git clone --branch main --single-branch https://github.com/muhammadnaumantahir/self-specialization.git
-%cd /content/self-specialization
-!git rev-parse HEAD
-!pip install -q -r requirements.txt pytest
-!PYTHONPATH=. pytest -q
-```
-
-Run the deterministic demo directly:
-
-```python
-%cd /content/self-specialization
-!PYTHONPATH=. python experiments/self_specialization_demo.py
-```
-
-To start from a clean capability registry for a research run:
-
-```python
-!SPS_DEMO_RESET=1 PYTHONPATH=. python experiments/self_specialization_demo.py
-```
+No Ollama setup is required.
 
 ## Research boundary
 
-This is an experiment-grade proof of concept, not a production autonomous programming system.
+This prototype demonstrates **capability-level runtime self-specialization with bounded growth**. It is intentionally not a general autonomous programming system.
 
-It intentionally excludes:
-
-- the full SPS ten-layer architecture
-- semantic growth operators
-- multi-agent orchestration
-- cloud APIs
-- paid credentials
-- a production security sandbox
-- unrestricted autonomous code execution
-
-The narrow Stage 1 research question is:
-
-> **Can an existing State 0 capability generate a copy of itself and deterministically transform that copy into an allowed type-specialized capability, while rejecting transformations that cross the declared type-specialization boundary?**
-
-The next research stage can address a separate question:
-
-> **Can the system perform semantic growth, such as multiplication → addition, under an independently defined and constrained growth mechanism?**
-
-## Research observation
-
-The key result is the separation between **generalization**, **copy generation**, **type specialization**, and future **semantic growth**:
+Semantic growth such as:
 
 ```text
-INITIAL
-IntegerMultiplication [S0]
-
-REQUEST
-FloatMultiplication missing
-
-EVOLUTION
-IntegerMultiplication [S0]
-        ↓
-Serialize / Generalize
-        ↓
-SerializeCapability [S0]  ← dynamically created
-        ↓
-Reparent existing IntegerMultiplication [S0]
-        ↓
-Replicate → S0-C
-        ↓
-Check explicit Type Specialization Rules
-        ↓
-Transform types only
-        ↓
-Verify
-        ↓
-FloatMultiplication [S1]
-
-FINAL
-              SerializeCapability [S0]
-                        │
-               ┌────────┴────────┐
-               ▼                 ▼
- IntegerMultiplication    FloatMultiplication
-        [S0]                    [S1]
+IntegerMultiplication -> IntegerAddition
 ```
 
-The Stage 1 transformer is deliberately bounded: the rules file defines what type growth is legal, while semantic changes are left for a separate future growth mechanism.
+should be implemented later as a separate growth mechanism with its own rules, constraints and verification.
