@@ -1,184 +1,191 @@
 # Self-Specialization Prototype Design
 
 ## Goal
-Build a small research prototype demonstrating that a statically programmed capability can replicate itself and have the replicated child transformed into a specialized capability using an external local coding model.
 
-The canonical experiment is:
+Demonstrate a bounded self-specialization mechanism in which a programmer-defined capability can replicate itself and a replicated copy can be transformed into a new typed capability without changing its operation.
 
-`IntegerMultiplication (S0) -> replicated child (S0-C) -> Ollama specialization -> FloatMultiplication (S1)`
+Stage 1 is deterministic and does not require AI or a model server.
 
-The prototype is intentionally narrow and is not an implementation of the full ten-layer SPS architecture.
-
-## Research Question
-Can a capability create a managed copy of itself and, using an external reasoning/code-generation model, transform that copy into a new specialized capability that is verified before activation?
-
-## Scope
-Included:
-- Capability contract and lifecycle state.
-- Capability registry and parent/child lineage.
-- Replication of an existing capability.
-- Specialization request to local Ollama.
-- Generated Python implementation for the specialized capability.
-- AST/safety checks and isolated functional verification.
-- Activation only after verification succeeds.
-- Event/lineage trace sufficient to show the evolutionary transition.
-- Deterministic unit tests using a fake Ollama client.
-- A Colab notebook for an end-to-end Ollama experiment.
-
-Excluded:
-- UI.
-- Full SPS ten-layer architecture.
-- Autonomous multi-agent orchestration.
-- Production-grade sandboxing.
-- Cloud model APIs or paid API keys.
-- General-purpose autonomous software engineering.
-
-## Architecture
+Canonical example:
 
 ```text
-IntegerMultiplication (S0)
+IntegerMultiplication [S0]
         |
         v
-Replication Engine
+Transient copy [S0-C]
         |
         v
-IntegerMultiplication-child (S0-C)
+Type Specialization Rules
+        |
+        +--> FloatMultiplication [GENERATED]
         |
         v
-Specialization Engine -> Ollama
+Verification
         |
         v
-Generated FloatMultiplication source
-        |
-        v
-Verifier
-  - syntax
-  - restricted imports/AST checks
-  - isolated functional tests
-        |
-   PASS | FAIL
-        |       \
-        v        v
-      S1       FAILED
-        |
-        v
-     Registry + lineage
+FloatMultiplication [S1]
 ```
+
+## Research Question
+
+> Can a running system create a managed copy of an existing capability, apply an explicit type-only specialization rule to that copy, verify the result, and activate the new capability while preserving the original capability?
+
+## Stage 1 Growth Boundary
+
+Type specialization is governed exclusively by:
+
+```text
+sps_specialization/type_specialization_rules.py
+```
+
+A transformation is allowed only when:
+
+1. The source and target operations are the same.
+2. The complete source contract matches a declared rule.
+3. The complete target contract matches a declared rule.
+
+Therefore:
+
+```text
+IntegerMultiplication -> FloatMultiplication   ALLOWED
+IntegerMultiplication -> LongMultiplication    ALLOWED
+IntegerMultiplication -> DoubleMultiplication  ALLOWED
+IntegerMultiplication -> IntegerAddition       REJECTED
+```
+
+`multiply -> add` is semantic growth, not type specialization, and is reserved for a later mechanism.
+
+## Scope
+
+Included:
+
+- Capability identity and lifecycle state.
+- Runtime capability registry and parent/child lineage.
+- Transient replication (`S0-C`).
+- Deterministic type-only specialization.
+- Explicit type-specialization rules.
+- Verification before activation.
+- Persistent capability metadata and Python source.
+- Runtime dispatch and reuse of active `S1` capabilities.
+- Deterministic unit tests.
+- Google Colab reproduction without AI/model dependencies.
+
+Excluded:
+
+- Semantic growth (`multiply -> add`).
+- Full ten-layer SPS architecture.
+- Autonomous multi-agent planning.
+- General-purpose autonomous software engineering.
+- Production-grade sandbox/security guarantees.
+- OS-level executable replacement.
 
 ## Components
 
 ### Capability
-A capability is a typed executable unit with immutable identity and mutable lifecycle state. It records its parent capability, source code, input/output contract, and lifecycle timestamps.
 
-Minimum fields:
-- `id`
-- `name`
-- `version`
-- `state`
-- `parent_id`
-- `input_types`
-- `output_type`
-- `source_code`
-- `created_at`
-- `activated_at`
+Typed executable unit with immutable identity, source, input/output contract, parent relationship, lifecycle state, handler and event history.
 
-The executable entry point is `execute(a, b)` for this prototype.
+### CapabilityRegistry
 
-### Registry
-Stores capabilities by ID and provides lineage traversal. A capability cannot be activated twice and a failed capability is not returned as active.
+Stores capabilities, lineage, metadata, events and source artifacts. The default application-owned location is:
 
-### Replication Engine
-Creates a new capability record from a parent. Replication preserves the parent's executable behavior and contract but assigns a new ID and records `parent_id`.
+```text
+data/capability-registry/
+```
 
-### Specialization Engine
-Takes a replicated capability and a target specialization. It sends the parent contract and target requirements to Ollama and parses the returned Python source. Generated code is attached to the child but remains inactive.
+The location can be overridden with `SPS_CAPABILITY_REGISTRY_DIR`.
 
-### Ollama Adapter
-Uses the local Ollama HTTP API at `http://localhost:11434/api/generate`. The model is configurable through `OLLAMA_MODEL` and defaults to `qwen2.5-coder:7b`. No credentials are required.
+### ReplicationEngine
 
-The prompt must explicitly state that the model is generating a specialization of the supplied capability rather than inventing an unrelated function.
+Creates a transient independent `S0-C` copy from an existing capability. The copy is used as the specialization substrate and is not published as a final hierarchy node.
+
+### TypeSpecializationTransformer
+
+Performs the deterministic type-only transformation. It parses the source, detects the supported operation, checks the explicit rule table, replaces only type annotations, and preserves the original operation body.
+
+### Type Specialization Rules
+
+`type_specialization_rules.py` is the policy boundary. It is deliberately separate from the transformer so legal growth paths are explicit and reviewable.
 
 ### Verifier
-Generation is not activation. Generated source must pass:
-1. Python AST parsing.
-2. A restricted AST policy that rejects dangerous imports/calls and requires `execute`.
-3. Execution in an isolated subprocess with a timeout.
-4. Functional tests for float multiplication.
 
-The verifier must fail closed: any generation, parse, policy, or runtime failure produces `FAILED` and the generated capability is never activated.
+Checks candidate source for syntax, restricted AST policy and functional behavior before activation. Verification failure produces `FAILED` and the capability remains inactive.
 
-This is an experiment-grade execution boundary, not a security guarantee against hostile native code.
+### EvolutionEngine
 
-### Lineage/Event Trace
-Record events such as `REGISTER`, `REPLICATE`, `SPECIALIZE`, `GENERATED`, `VERIFY_PASS`, `VERIFY_FAIL`, `ACTIVATE`, and `FAILED`. The final experiment prints the lineage from the original capability through its specialized descendant.
+Coordinates generalization, reparenting, replication, deterministic specialization, verification and activation.
+
+### CapabilityDispatcher
+
+Resolves an existing typed capability when available. When a typed specialization is missing, it invokes the evolution path using the requested specialization contract.
 
 ## Lifecycle
 
 ```text
-S0 -> S0-C -> SPECIALIZING -> GENERATED -> VERIFIED -> S1
-                                  |
-                                  +-> FAILED
+S0
+ |
+ +--> S0-C
+       |
+       +--> rule rejected -> FAILED
+       |
+       v
+    GENERATED
+       |
+       +--> verification failed -> FAILED
+       |
+       v
+      S1
 ```
 
-- `S0`: programmer-created IntegerMultiplication.
-- `S0-C`: replicated child before specialization.
-- `SPECIALIZING`: child is awaiting model-generated specialization.
-- `GENERATED`: source has been returned by Ollama.
-- `VERIFIED`: source has passed all verification gates.
-- `S1`: specialized capability is active and registered.
-- `FAILED`: specialization or verification failed; never active.
-
-## Canonical Demonstration
-
-The initial source is only integer multiplication. The experiment then asks Ollama to specialize the replicated child into float multiplication. The expected generated contract is equivalent to:
-
-```python
-def execute(a: float, b: float) -> float:
-    return a * b
-```
-
-The exact generated formatting may vary; the behavior and contract are what are verified.
-
-Expected lineage:
+For the current experiment:
 
 ```text
-IntegerMultiplication (S0)
-  └── IntegerMultiplication-child (S0-C)
-        └── FloatMultiplication (S1)
+Before request:
+IntegerMultiplication [S0]
+
+After float request:
+SerializeCapability [S0]
+├── IntegerMultiplication [S0]
+└── FloatMultiplication [S1]
 ```
 
-## Failure Experiment
+Creating `SerializeCapability` does not change the original integer capability's state.
 
-The test suite must include a generated specialization that violates the verifier policy or functional contract. The system must report failure, keep the capability inactive, and preserve the failed lineage event. This demonstrates the distinction between `Generation` and `Activation`.
+## Persistence
+
+An active generated capability is persisted as:
+
+```text
+data/capability-registry/
+├── registry.json
+├── records/<capability-id>.json
+└── sources/<capability-id>_<name>.py
+```
+
+The transient `S0-C` copy is not persisted as a final capability.
 
 ## Testing Strategy
 
-Unit tests use a fake Ollama adapter so the core lifecycle is deterministic and does not require a running model. Tests cover:
-- capability creation and execution;
-- replication and parent linkage;
-- specialization prompt/response handling;
-- generated-source parsing;
-- verifier acceptance of valid float multiplication;
-- verifier rejection of unsafe/invalid code;
-- registry activation rules;
-- lineage events;
-- failed specialization never becoming active.
+The test suite must prove:
 
-The Colab notebook performs the real Ollama integration separately and runs the same experiment against `qwen2.5-coder:7b` when the model is available.
+- IntegerMultiplication starts as S0 and executes correctly.
+- Replication creates S0-C.
+- Integer -> float specialization works without AI.
+- Integer -> long and integer -> double are recognized as legal Stage 1 paths.
+- Multiplication -> addition is rejected by the rule boundary.
+- Non-declared type transformations are rejected.
+- The transformation preserves the multiplication body.
+- Verification gates S1 activation.
+- The original integer capability remains S0.
+- The generated float capability is persisted, reloaded and reused.
 
-## Success Criteria
+Run:
 
-The prototype succeeds when:
-1. Only IntegerMultiplication is initially programmed.
-2. The system creates a distinct child with parent linkage.
-3. Ollama supplies the specialization source.
-4. The verifier accepts a correct float specialization.
-5. The specialized capability becomes `S1` and executes float multiplication.
-6. The lineage clearly shows `S0 -> S0-C -> S1`.
-7. A failed/unsafe generated specialization is rejected and never activated.
-8. The full deterministic test suite passes without Ollama.
-9. The Colab notebook contains a reproducible real-model experiment.
+```bash
+pip install -r requirements.txt
+PYTHONPATH=. pytest -q
+```
 
-## Repository Placement
+## Research Boundary
 
-The prototype lives under `self-specialization/` in the existing private `muhammadnaumantahir/Letter` repository. Work is isolated on branch `feat/self-specialization-prototype`; `main` is not modified by this implementation.
+This prototype demonstrates bounded runtime self-specialization at capability level. It should not be presented as complete general self-programming or unrestricted self-modification.
