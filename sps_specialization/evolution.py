@@ -7,10 +7,10 @@ SERIALIZE_SOURCE = '''def execute(a, b):\n    raise NotImplementedError("Seriali
 
 
 class EvolutionEngine:
-    def __init__(self, registry, ollama, verifier):
+    def __init__(self, registry, verifier, specialization_engine=None):
         self.registry = registry
-        self.ollama = ollama
         self.verifier = verifier
+        self.specialization_engine = specialization_engine or SpecializationEngine()
 
     def _create_general_parent(self, source):
         """Generalize an existing capability only when a specialization family is needed."""
@@ -32,7 +32,7 @@ class EvolutionEngine:
         return general
 
     def evolve(self, parent_id, target_name, input_types, output_type, cases, source_capability_id=None):
-        """Replicate a source capability and publish its specialization under a general parent."""
+        """Replicate a source capability and publish its bounded specialization."""
         if parent_id is None:
             if source_capability_id is None:
                 raise LookupError("A source capability is required to create a general parent")
@@ -48,7 +48,7 @@ class EvolutionEngine:
         child = ReplicationEngine().replicate(source, parent_id=general_parent.id)
 
         try:
-            generated = SpecializationEngine(self.ollama).specialize(
+            generated = self.specialization_engine.specialize(
                 child,
                 target_name,
                 input_types,
