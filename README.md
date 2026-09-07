@@ -3,9 +3,42 @@
 A minimal research prototype demonstrating two capabilities from the self-programming research problem:
 
 1. An existing capability can generate a copy of itself.
-2. The generated copy can be transformed into a specialized capability.
+2. The generated copy can be transformed into a bounded specialized capability.
 
 The prototype intentionally focuses on the small State 0 → State 1 experiment and does **not** attempt to implement the full SPS ten-layer architecture.
+
+## Stage 1: bounded type specialization
+
+This implementation deliberately removes the AI/model dependency from specialization.
+
+The rule boundary is a separate file:
+
+```text
+sps_specialization/type_specialization_rules.py
+```
+
+Only transformations explicitly declared there are allowed. The transformer does **not** invent a new operation.
+
+For the current multiplication family:
+
+```text
+IntegerMultiplication [S0]
+   ├── FloatMultiplication  ✓
+   ├── LongMultiplication   ✓
+   ├── DoubleMultiplication ✓
+   └── IntegerAddition      ✗
+```
+
+Therefore:
+
+```text
+IntegerMultiplication → FloatMultiplication   = type specialization
+IntegerMultiplication → LongMultiplication    = type specialization
+IntegerMultiplication → DoubleMultiplication  = type specialization
+IntegerMultiplication → IntegerAddition       = rejected
+```
+
+Semantic growth such as `multiply → add` is intentionally reserved for a later stage and is not part of Stage 1.
 
 ## Core research lifecycle
 
@@ -31,11 +64,12 @@ SerializeCapability [S0]  ← CREATED NOW
 Replicate IntegerMultiplication
         │
         ▼
-Transient IntegerMultiplication-C [S0-C]
+Transient IntegerMultiplication-copy [S0-C]
         │
         ▼
-Ollama + Qwen Coder specialization
+Deterministic TypeSpecializationTransformer
         │
+        │ consults explicit type_specialization_rules.py
         ▼
 FloatMultiplication [GENERATED]
         │
@@ -49,11 +83,9 @@ FloatMultiplication [S1]
 Attach under SerializeCapability
 ```
 
-## Before and after
+## Before the float request
 
-### Before the float request
-
-The persistent registry contains exactly the programmer-defined capability:
+The persistent registry contains the programmer-defined capability:
 
 ```text
 IntegerMultiplication [S0]
@@ -78,7 +110,7 @@ It can immediately execute:
 multiply(6, 7) → 42
 ```
 
-### After the float request
+## After the float request
 
 When the request
 
@@ -94,9 +126,9 @@ The existing `IntegerMultiplication [S0]` capability is selected as the source. 
 SerializeCapability [S0]
 ```
 
-The **existing integer capability is reparented**, preserving its original ID and its State 0 status.
+The **existing integer capability is reparented**, preserving its original ID and State 0 status.
 
-A transient copy is then made for specialization. The copy is sent to the external brain (Ollama + `qwen2.5-coder:7b`), verified, and activated as State 1.
+A transient copy is then made for specialization. The deterministic transformer checks the source operation and the exact source/target type contract against the explicit rules. Only if a declared rule matches can the new capability be created.
 
 Final persistent hierarchy:
 
@@ -121,7 +153,7 @@ State labels describe the capability's evolutionary state, not its depth in the 
 | `S0-C` | Transient replicated copy used as the specialization substrate |
 | `GENERATED` | Generated source exists but is not yet activated |
 | `S1` | Verified, activated specialized capability |
-| `FAILED` | Generation or verification failed |
+| `FAILED` | Specialization or verification failed |
 
 Therefore:
 
@@ -133,6 +165,67 @@ FloatMultiplication   = S1
 
 Creating `SerializeCapability` does **not** promote `IntegerMultiplication` to S1. The original capability remains State 0; only the verified specialized result becomes State 1.
 
+## Type specialization rules
+
+`type_specialization_rules.py` is the explicit growth boundary for Stage 1.
+
+A rule contains:
+
+```text
+source operation
+source input types
+source output type
+target input types
+target output type
+runtime Python annotations
+```
+
+The matching process is:
+
+```text
+Source capability
+       │
+       ▼
+Detect source operation
+       │
+       ▼
+Detect requested target operation
+       │
+       ├── different operation ──→ REJECT
+       │
+       ▼
+Exact source/target contract lookup
+       │
+       ├── no declared rule ─────→ REJECT
+       │
+       ▼
+Transform only the type annotations
+       │
+       ▼
+Preserve original multiplication body
+       │
+       ▼
+Generate candidate → Verify → S1
+```
+
+The implementation therefore has no path in the Stage 1 transformer from multiplication to addition. To add such a transformation later, a **different semantic-growth mechanism** must be designed explicitly rather than silently extending the type-specialization rules.
+
+## Future numeric specializations
+
+The rule table already establishes the extension mechanism for additional numeric forms:
+
+```text
+IntegerMultiplication [S0]
+       │
+       ├── FloatMultiplication  [S1]
+       ├── LongMultiplication   [S1]
+       └── DoubleMultiplication [S1]
+```
+
+`long` is represented as a logical integer-width target and `double` as a logical floating-point target while Python runtime annotations map them to supported Python primitives. The logical type remains part of the capability contract.
+
+Adding a new legal path is therefore a rule change, not a transformer rewrite.
+
 ## Complete runtime sequence
 
 ```text
@@ -140,17 +233,18 @@ Creating `SerializeCapability` does **not** promote `IntegerMultiplication` to S
 2. User requests float multiplication
 3. Dispatcher detects FloatMultiplication is missing
 4. Existing IntegerMultiplication [S0] is selected as the source
-5. System serializes/generalizes the existing source
-6. SerializeCapability [S0] is created at runtime
-7. Existing IntegerMultiplication [S0] is reparented under it
-8. IntegerMultiplication is replicated into transient S0-C
-9. Ollama/Qwen transforms the copy into FloatMultiplication
-10. Generated source enters GENERATED state
-11. Verifier checks syntax, policy and functional cases
-12. Verified FloatMultiplication becomes S1
-13. FloatMultiplication is linked directly under SerializeCapability
-14. Generated metadata and source are persisted
-15. Later float requests reuse the persisted S1 capability
+5. System creates SerializeCapability [S0] when the family needs a generalization boundary
+6. Existing IntegerMultiplication [S0] is reparented under it
+7. IntegerMultiplication is replicated into transient S0-C
+8. TypeSpecializationTransformer identifies the source operation
+9. Stage 1 rule table validates the exact type transformation
+10. Transformer changes the type annotations and preserves the multiplication body
+11. Generated source enters GENERATED state
+12. Verifier checks syntax, policy and functional cases
+13. Verified FloatMultiplication becomes S1
+14. FloatMultiplication is linked directly under SerializeCapability
+15. Generated metadata and source are persisted
+16. Later float requests reuse the persisted S1 capability
 ```
 
 ## Capability Handler
@@ -197,21 +291,21 @@ Stores capability identity, contracts, parent/child relationships, events, sourc
 
 Creates the transient `S0-C` copy. This proves the copy-generation step without polluting the final capability hierarchy.
 
+### `TypeSpecializationTransformer`
+
+Performs the deterministic Stage 1 transformation using only the explicit rules from `type_specialization_rules.py`.
+
 ### `SpecializationEngine`
 
-Asks the external model to transform the replicated implementation into the requested specialization.
-
-### `OllamaClient`
-
-Connects to local Ollama. The default model is `qwen2.5-coder:7b`.
+Facade for the Stage 1 deterministic specialization mechanism.
 
 ### `Verifier`
 
-Checks generated source before activation using syntax/AST restrictions and functional test cases.
+Checks candidate source before activation using syntax/AST restrictions and functional test cases.
 
 ### `EvolutionEngine`
 
-Coordinates dynamic serialization/generalization, reparenting, replication, AI specialization, verification and activation.
+Coordinates dynamic serialization/generalization, reparenting, replication, deterministic specialization, verification and activation.
 
 ### `CapabilityDispatcher`
 
@@ -226,6 +320,7 @@ SERIALIZE
 REPARENT
 REPLICATE
 SPECIALIZE
+TYPE_SPECIALIZE
 GENERATED
 VERIFY_PASS
 ACTIVATE
@@ -236,10 +331,10 @@ The events are persisted with capability metadata and exposed through registry i
 
 ## Persistence
 
-The registry writes:
+The capability registry is application-owned by default:
 
 ```text
-/tmp/sps-capability-registry/
+data/capability-registry/
 ├── registry.json
 ├── records/
 │   ├── <capability-id>.json
@@ -250,13 +345,15 @@ The registry writes:
     └── ...
 ```
 
+Set `SPS_CAPABILITY_REGISTRY_DIR` to override this location for CI or experiments.
+
 The JSON record contains state, contracts, relationships, events and handler metadata. The Python file contains executable source.
 
-After reload, the S1 float capability can be reused without another AI generation step, while the original integer capability remains S0.
+After reload, the S1 float capability can be reused without another transformation step, while the original integer capability remains S0.
 
-## Deterministic tests
+## Tests
 
-The tests do not require Ollama:
+No model server, Ollama installation, API key or network service is required:
 
 ```bash
 pip install -r requirements.txt
@@ -267,11 +364,13 @@ Coverage includes:
 
 - initial State 0 integer capability
 - transient S0-C replication
-- generated float specialization
-- source normalization
+- deterministic float specialization
+- explicit type rule matching
+- deterministic future numeric targets (`long`, `double`)
+- rejection of multiplication → addition
+- rejection of unsupported target types
 - verifier acceptance/rejection
 - verification diagnostics
-- Ollama failure diagnostics
 - dispatcher reuse vs specialization
 - dynamic creation of `SerializeCapability`
 - reparenting the existing `IntegerMultiplication` without changing its ID
@@ -295,30 +394,18 @@ Use a fresh clone so the notebook always runs the current `main` branch:
 !PYTHONPATH=. pytest -q
 ```
 
-Start Ollama from `/content` before deleting/recloning the repository. This avoids the Colab `llama-server process has terminated / cannot get current path` failure:
-
-```python
-%cd /content
-!apt-get update -qq
-!apt-get install -y -qq zstd curl
-!curl -fsSL https://ollama.com/install.sh | sh
-!pkill -9 ollama || true
-!pkill -9 llama-server || true
-!nohup ollama serve >/tmp/ollama.log 2>&1 &
-!sleep 5
-!ollama --version
-!curl -sf http://127.0.0.1:11434/api/tags || (cat /tmp/ollama.log; exit 1)
-!ollama pull qwen2.5-coder:7b
-```
-
-Then:
+Run the deterministic demo directly:
 
 ```python
 %cd /content/self-specialization
 !PYTHONPATH=. python experiments/self_specialization_demo.py
 ```
 
-The demo explicitly prints the initial State 0 hierarchy and the post-request hierarchy.
+To start from a clean capability registry for a research run:
+
+```python
+!SPS_DEMO_RESET=1 PYTHONPATH=. python experiments/self_specialization_demo.py
+```
 
 ## Research boundary
 
@@ -327,19 +414,24 @@ This is an experiment-grade proof of concept, not a production autonomous progra
 It intentionally excludes:
 
 - the full SPS ten-layer architecture
+- semantic growth operators
 - multi-agent orchestration
 - cloud APIs
 - paid credentials
 - a production security sandbox
 - unrestricted autonomous code execution
 
-The narrow research question is:
+The narrow Stage 1 research question is:
 
-> **Can an existing State 0 capability create a generalization boundary on demand, generate a copy of itself, transform that copy with an external AI model, verify the result, and activate the specialization as a reusable State 1 sibling while preserving the original State 0 capability?**
+> **Can an existing State 0 capability generate a copy of itself and deterministically transform that copy into an allowed type-specialized capability, while rejecting transformations that cross the declared type-specialization boundary?**
+
+The next research stage can address a separate question:
+
+> **Can the system perform semantic growth, such as multiplication → addition, under an independently defined and constrained growth mechanism?**
 
 ## Research observation
 
-The key result is the distinction between **generalization**, **copy generation**, and **specialization**:
+The key result is the separation between **generalization**, **copy generation**, **type specialization**, and future **semantic growth**:
 
 ```text
 INITIAL
@@ -359,7 +451,9 @@ Reparent existing IntegerMultiplication [S0]
         ↓
 Replicate → S0-C
         ↓
-Specialize with Qwen
+Check explicit Type Specialization Rules
+        ↓
+Transform types only
         ↓
 Verify
         ↓
@@ -374,4 +468,4 @@ FINAL
         [S0]                    [S1]
 ```
 
-This is the intended State 0 → State 1 prototype: the programmer-defined integer capability remains the original S0 capability, while the generated and verified float specialization becomes S1.
+The Stage 1 transformer is deliberately bounded: the rules file defines what type growth is legal, while semantic changes are left for a separate future growth mechanism.
