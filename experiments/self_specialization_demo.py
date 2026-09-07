@@ -2,7 +2,7 @@
 
 Stage 1 is deterministic. No AI model is used: IntegerMultiplication can grow
 only along type-specialization rules declared in
-`sps_specialization/type_specialization_rules.py`.
+`specialization/type_specialization_rules.py`.
 """
 
 import os
@@ -12,7 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from sps_specialization import Capability, CapabilityDispatcher, CapabilityRegistry, EvolutionEngine, Verifier
+from specialization import Capability, CapabilityDispatcher, CapabilityRegistry, EvolutionEngine, Verifier
 
 INTEGER_SOURCE = '''def execute(a: int, b: int) -> int:\n    return a * b\n'''
 
@@ -53,7 +53,7 @@ def main():
     print("\n=== BOUNDARY ===")
     print("Allowed: int multiplication -> float/long/double multiplication")
     print("Rejected: multiplication -> addition")
-    print("Rules: sps_specialization/type_specialization_rules.py")
+    print("Rules: specialization/type_specialization_rules.py")
 
     reloaded = CapabilityRegistry.persistent()
     persisted = reloaded.get("FloatMultiplication")
